@@ -54,7 +54,7 @@ app.use(helmet());
 // CORS
 const allowedOrigins = [
     process.env.FRONTEND_URL || 'http://localhost:3000',
-    'http://localhost:8080'
+    'http://localhost:8080',"https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app"
 ];
 
 const corsOptions = {
@@ -150,6 +150,7 @@ app.use(`/api/${API_VERSION}/admin`, require('./src/routes/adminRoutes'));
 app.use(`/api/${API_VERSION}/revisions`, require('./src/routes/revisionRoutes'));
 app.use(`/api/${API_VERSION}/tests`, require('./src/routes/testRoutes'));
 app.use(`/api/${API_VERSION}/quiz-generator`, require('./src/routes/quizGeneratorRoutes'));
+app.use(`/api/${API_VERSION}/daily-challenge`, require('./src/routes/dailyChallengeRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

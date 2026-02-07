@@ -162,7 +162,7 @@ UserLineSchema.statics.getDueLines = async function(userId, limit = 50) {
         })
         .populate({
             path: 'lineId',
-            select: 'ncertText subject chapter class',
+            select: 'ncertText subject chapter class book',
             options: { strictPopulate: false } // Don't throw error if lineId is invalid
         })
         .sort({ level: 1, streak: -1 }) // Easy first, then by streak
