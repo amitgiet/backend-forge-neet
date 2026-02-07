@@ -1,0 +1,72 @@
+# Logs
+/node_modules
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# Home directory and system files (if repo is at home level)
+/.antigravity/
+/.aws/
+/.bash_history
+/.codex/
+/.continue/
+/.cursor/
+/.docker/
+/.env
+/.gemini/
+/.gitconfig
+/.gk/
+/.jdks/
+/.lesshst
+/.m2/
+/.pm2/
+/.python_history
+/.redis-insight/
+/.ssh/
+/.trae-aicc/
+/.trae/
+/3D Objects/
+/AppData/
+/Contacts/
+/Documents/
+/Downloads/
+/Ecom_ms/
+/Favorites/
+/Links/
+/Music/
+/NTUSER.DAT*
+/OneDrive/
+/Pictures/
+/Saved Games/
+/Searches/
+/Tracing/
+/Videos/
+/WPS Cloud Files/
+/cartique_web_front/
+/daily-fitness/
+/*.exe
+/index.js
+/main.ts
+/ntuser.dat*
+/ntuser.ini
+/package-lock.json
+/package.json

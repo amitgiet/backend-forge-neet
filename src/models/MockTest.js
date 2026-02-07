@@ -1,0 +1,204 @@
+const mongoose = require('mongoose');
+
+const MockTestSchema = new mongoose.Schema({
+    // Test identification
+    testId: {
+        type: String,
+        required: true,
+        unique: true
+    },
+
+    title: {
+        en: { type: String, required: true },
+        hi: { type: String }
+    },
+
+    description: {
+        en: { type: String },
+        hi: { type: String }
+    },
+
+    // Exam classification
+    examType: {
+        type: String,
+        enum: ['NEET_UG', 'JEE_MAIN', 'JEE_ADVANCED', 'BITSAT', 'AIIMS'],
+        required: true
+    },
+
+    // Test type
+    testType: {
+        type: String,
+        enum: ['FULL_TEST', 'SUBJECT_TEST', 'CHAPTER_TEST', 'PYQ_TEST', 'CUSTOM'],
+        required: true
+    },
+
+    // Test configuration
+    config: {
+        totalQuestions: { type: Number, required: true },
+        totalMarks: { type: Number, required: true },
+        duration: { type: Number, required: true }, // in minutes
+
+        // Marking scheme
+        marksPerCorrect: { type: Number, default: 4 },
+        marksPerIncorrect: { type: Number, default: -1 },
+        marksPerUnattempted: { type: Number, default: 0 },
+
+        // Section-wise breakdown
+        sections: [{
+            name: { type: String, required: true }, // Physics, Chemistry, Biology
+            subject: { type: String, required: true },
+            questionsCount: { type: Number, required: true },
+            startQuestionNo: { type: Number },
+            endQuestionNo: { type: Number }
+        }]
+    },
+
+    // Questions (references)
+    questions: [{
+        questionId: {
+            type: String,
+            ref: 'Question',
+            required: true
+        },
+        questionNumber: { type: Number, required: true },
+        section: { type: String },
+        chapterId: { type: String }
+    }],
+
+    // Chapter mapping (for weakness analysis)
+    chapterMapping: [{
+        chapterId: { type: String, required: true },
+        subject: { type: String, required: true },
+        questionNumbers: [Number],
+        totalMarks: { type: Number }
+    }],
+
+    // Difficulty distribution
+    difficultyDistribution: {
+        easy: { type: Number, default: 0 },
+        medium: { type: Number, default: 0 },
+        hard: { type: Number, default: 0 }
+    },
+
+    // Access control
+    accessType: {
+        type: String,
+        enum: ['FREE', 'PRO', 'ULTIMATE'],
+        default: 'FREE'
+    },
+
+    // Scheduling
+    isScheduled: {
+        type: Boolean,
+        default: false
+    },
+
+    scheduledAt: Date,
+
+    // Test availability
+    isActive: {
+        type: Boolean,
+        default: true
+    },
+
+    isLive: {
+        type: Boolean,
+        default: false
+    },
+
+    // Test window (for live tests)
+    startTime: Date,
+    endTime: Date,
+
+    // Tags & metadata
+    tags: [String],
+
+    institution: {
+        type: String,
+        enum: ['Allen', 'Aakash', 'FIITJEE', 'Resonance', 'NTA', 'Custom']
+    },
+
+    year: Number, // For PYQ tests
+
+    // Statistics
+    stats: {
+        totalAttempts: { type: Number, default: 0 },
+        avgScore: { type: Number, default: 0 },
+        avgPercentage: { type: Number, default: 0 },
+        highestScore: { type: Number, default: 0 },
+        lowestScore: { type: Number, default: 0 },
+        avgTimeSpent: { type: Number, default: 0 }
+    },
+
+    // Admin metadata
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }
+
+}, {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
+});
+
+// Indexes
+MockTestSchema.index({ testId: 1 });
+MockTestSchema.index({ examType: 1, testType: 1 });
+MockTestSchema.index({ accessType: 1, isActive: 1 });
+MockTestSchema.index({ isLive: 1, scheduledAt: -1 });
+MockTestSchema.index({ tags: 1 });
+
+// Virtual for attempt count
+MockTestSchema.virtual('attempts', {
+    ref: 'TestAttempt',
+    localField: 'testId',
+    foreignField: 'testId',
+    count: true
+});
+
+// Method to update stats
+MockTestSchema.methods.updateStats = function (score, percentage, timeSpent) {
+    const total = this.stats.totalAttempts + 1;
+
+    this.stats.totalAttempts = total;
+    this.stats.avgScore = Math.round(
+        ((this.stats.avgScore * (total - 1)) + score) / total
+    );
+    this.stats.avgPercentage = Math.round(
+        ((this.stats.avgPercentage * (total - 1)) + percentage) / total
+    );
+    this.stats.avgTimeSpent = Math.round(
+        ((this.stats.avgTimeSpent * (total - 1)) + timeSpent) / total
+    );
+
+    if (score > this.stats.highestScore) {
+        this.stats.highestScore = score;
+    }
+
+    if (this.stats.lowestScore === 0 || score < this.stats.lowestScore) {
+        this.stats.lowestScore = score;
+    }
+};
+
+// Static method to get tests by exam type
+MockTestSchema.statics.getTestsByExam = async function (examType, testType, accessLevel) {
+    const query = { examType, isActive: true };
+
+    if (testType) query.testType = testType;
+
+    // Access control
+    const accessTypes = ['FREE'];
+    if (accessLevel === 'pro' || accessLevel === 'ultimate') {
+        accessTypes.push('PRO');
+    }
+    if (accessLevel === 'ultimate') {
+        accessTypes.push('ULTIMATE');
+    }
+
+    query.accessType = { $in: accessTypes };
+
+    return this.find(query).sort({ createdAt: -1 });
+};
+
+module.exports = mongoose.model('MockTest', MockTestSchema);
