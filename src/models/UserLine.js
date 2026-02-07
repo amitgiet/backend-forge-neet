@@ -45,7 +45,9 @@ const UserLineSchema = new mongoose.Schema({
         correctAnswers: { type: Number, required: true },
         accuracy: { type: Number }, // correctAnswers / quizzesAttempted * 100
         levelAfter: { type: Number, required: true },
-        timeSpent: { type: Number } // seconds for entire session
+        timeSpent: { type: Number }, // seconds for entire session
+        isAdjustment: { type: Boolean, default: false }, // True if manually adjusted
+        adjustmentReason: String // 'user-request', 'admin', 'boost', etc.
     }],
     
     // Total stats for this line
@@ -58,6 +60,23 @@ const UserLineSchema = new mongoose.Schema({
     isMastered: {
         type: Boolean,
         default: false
+    },
+    
+    // Priority & Customization
+    priority: {
+        type: String,
+        enum: ['low', 'normal', 'urgent'],
+        default: 'normal'
+    },
+    
+    customSchedule: {
+        enabled: { type: Boolean, default: false },
+        intervals: [Number] // Custom intervals in days, e.g., [1, 3, 7, 14, 21, 30, 45]
+    },
+    
+    autoSkipL7: {
+        type: Boolean,
+        default: false // Auto-archive when reaching L7 (mastery)
     },
     
     // User selected this line
@@ -135,14 +154,32 @@ UserLineSchema.statics.getDueLines = async function(userId, limit = 50) {
     const today = new Date();
     today.setHours(23, 59, 59, 999); // End of today
     
-    return this.find({
-        userId,
-        nextRevision: { $lte: today },
-        level: { $gte: 1, $lte: 7 }
-    })
-    .populate('lineId')
-    .sort({ level: 1, streak: -1 }) // Easy first, then by streak
-    .limit(limit);
+    try {
+        const lines = await this.find({
+            userId,
+            nextRevision: { $lte: today },
+            level: { $gte: 1, $lte: 7 }
+        })
+        .populate({
+            path: 'lineId',
+            select: 'ncertText subject chapter class',
+            options: { strictPopulate: false } // Don't throw error if lineId is invalid
+        })
+        .sort({ level: 1, streak: -1 }) // Easy first, then by streak
+        .limit(limit);
+        
+        return lines;
+    } catch (error) {
+        console.error('Error in getDueLines:', error);
+        // Fallback: return without populate if there's an error
+        return this.find({
+            userId,
+            nextRevision: { $lte: today },
+            level: { $gte: 1, $lte: 7 }
+        })
+        .sort({ level: 1, streak: -1 })
+        .limit(limit);
+    }
 };
 
 // Static method to create or update user line

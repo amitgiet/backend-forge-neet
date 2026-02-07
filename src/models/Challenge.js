@@ -39,25 +39,81 @@ const challengeSchema = new mongoose.Schema({
             type: Number,
             required: true
         },
-        lines: [{
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'NCERTLine'
-        }],
-        completed: {
-            type: Boolean,
-            default: false
+        date: {
+            type: Date,
+            required: true
         },
-        completedAt: Date,
-        quizResults: [{
+        quizzes: [{
             lineId: {
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'NCERTLine'
             },
-            correctAnswers: Number,
-            totalQuizzes: Number,
+            quizCount: {
+                type: Number,
+                default: 4
+            },
+            questions: [{
+                question: String,
+                options: [String],
+                correctAnswer: Number,
+                explanation: String
+            }],
+            isCompleted: {
+                type: Boolean,
+                default: false
+            },
+            completedAt: Date,
+            score: Number,
             timeSpent: Number
-        }]
+        }],
+        targetQuizzes: {
+            type: Number,
+            default: 4
+        },
+        completedQuizzes: {
+            type: Number,
+            default: 0
+        },
+        isUnlocked: {
+            type: Boolean,
+            default: false
+        },
+        isCompleted: {
+            type: Boolean,
+            default: false
+        },
+        completedAt: Date
     }],
+    progress: {
+        currentDay: {
+            type: Number,
+            default: 1
+        },
+        completedDays: {
+            type: Number,
+            default: 0
+        },
+        totalQuizzes: {
+            type: Number,
+            default: 0
+        },
+        completedQuizzes: {
+            type: Number,
+            default: 0
+        },
+        averageScore: {
+            type: Number,
+            default: 0
+        },
+        streak: {
+            type: Number,
+            default: 0
+        }
+    },
+    duration: {
+        type: Number,
+        default: 30
+    },
     streak: {
         type: Number,
         default: 0

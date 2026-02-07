@@ -149,6 +149,7 @@ app.use(`/api/${API_VERSION}/social`, require('./src/routes/socialRoutes'));
 app.use(`/api/${API_VERSION}/admin`, require('./src/routes/adminRoutes'));
 app.use(`/api/${API_VERSION}/revisions`, require('./src/routes/revisionRoutes'));
 app.use(`/api/${API_VERSION}/tests`, require('./src/routes/testRoutes'));
+app.use(`/api/${API_VERSION}/quiz-generator`, require('./src/routes/quizGeneratorRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

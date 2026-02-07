@@ -1,6 +1,27 @@
 const NeuronzService = require('../services/neuronzService');
 const ErrorResponse = require('../utils/errorResponse');
 
+// @desc    Clean up invalid UserLines (for development)
+// @route   DELETE /api/neuronz/cleanup
+// @access  Private
+exports.cleanupUserLines = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        
+        // Delete all UserLines for this user (fresh start)
+        const result = await require('../models/UserLine').deleteMany({ userId });
+        
+        res.status(200).json({
+            success: true,
+            message: `Deleted ${result.deletedCount} UserLine records. Ready for fresh start!`,
+            data: { deletedCount: result.deletedCount }
+        });
+
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
 // @desc    Get due NCERT lines for today
 // @route   GET /api/neuronz/due
 // @access  Private
@@ -208,6 +229,105 @@ exports.trackChapter = async (req, res, next) => {
 
             message: `Started tracking ${result.added} new lines.`,
             data: result
+        });
+
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Track by subject and topic for NeuronZ practice
+// @route   POST /api/neuronz/track-topic
+// @access  Private
+exports.trackBySubjectAndTopic = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { subject, topic } = req.body;
+
+        if (!subject || !topic) {
+            return next(new ErrorResponse('Subject and topic are required', 400));
+        }
+
+        const result = await NeuronzService.trackBySubjectAndTopic(userId, subject, topic);
+
+        res.status(200).json({
+            success: true,
+            message: result.message,
+            data: result
+        });
+
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Adjust line level manually
+// @route   PUT /api/neuronz/:lineId/level
+// @access  Private
+exports.adjustLineLevel = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { lineId } = req.params;
+        const { newLevel, reason } = req.body;
+
+        if (!newLevel || newLevel < 1 || newLevel > 7) {
+            return next(new ErrorResponse('Level must be between 1 and 7', 400));
+        }
+
+        const result = await NeuronzService.adjustLineLevel(userId, lineId, newLevel, reason);
+
+        res.status(200).json({
+            success: true,
+            message: `Level adjusted to ${newLevel}`,
+            data: result
+        });
+
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Customize line schedule and priority
+// @route   PUT /api/neuronz/:lineId/customize
+// @access  Private
+exports.customizeSchedule = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { lineId } = req.params;
+        const { priority, customSchedule, autoSkipL7 } = req.body;
+
+        const result = await NeuronzService.customizeLineSchedule(
+            userId,
+            lineId,
+            priority,
+            customSchedule,
+            autoSkipL7
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Schedule customized',
+            data: result
+        });
+
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Get line analytics and performance
+// @route   GET /api/neuronz/:lineId/analytics
+// @access  Private
+exports.getLineAnalytics = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { lineId } = req.params;
+
+        const analytics = await NeuronzService.getLineAnalytics(userId, lineId);
+
+        res.status(200).json({
+            success: true,
+            data: analytics
         });
 
     } catch (error) {

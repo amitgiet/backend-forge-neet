@@ -95,6 +95,7 @@ class ChallengeService {
     }
 
     async getTodaySchedule(challengeId, userId) {
+        const GeminiService = require('./geminiService');
         const challenge = await Challenge.findOne({ _id: challengeId, userId })
             .populate('dailySchedule.quizzes.lineId');
         
@@ -103,11 +104,50 @@ class ChallengeService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
-        const todaySchedule = challenge.dailySchedule.find(schedule => {
+        let todaySchedule = challenge.dailySchedule.find(schedule => {
             const scheduleDate = new Date(schedule.date);
             scheduleDate.setHours(0, 0, 0, 0);
             return scheduleDate.getTime() === today.getTime() && schedule.isUnlocked;
         });
+        
+        // Generate MCQ questions for today's quizzes if not already done
+        if (todaySchedule && todaySchedule.quizzes && todaySchedule.quizzes.length > 0) {
+            for (const quiz of todaySchedule.quizzes) {
+                // If no MCQ questions generated yet
+                if (!quiz.questions || quiz.questions.length === 0) {
+                    const ncertLine = quiz.lineId;
+                    if (ncertLine && ncertLine.ncertText) {
+                        try {
+                            const geminiService = new GeminiService();
+                            const generatedQuizzes = await geminiService.generateMicroQuizzes({
+                                ncertText: ncertLine.ncertText,
+                                subject: challenge.subject,
+                                class: ncertLine.class,
+                                chapter: ncertLine.chapter
+                            });
+                            
+                            quiz.questions = generatedQuizzes.slice(0, 4).map(q => ({
+                                question: q.question,
+                                options: q.options,
+                                correctAnswer: q.correctAnswer,
+                                explanation: q.explanation
+                            }));
+                        } catch (error) {
+                            console.error('Error generating quizzes for challenge:', error);
+                            // Fallback: create placeholder questions
+                            quiz.questions = [
+                                {
+                                    question: 'What is the main concept discussed in this section?',
+                                    options: ['Option A', 'Option B', 'Option C', 'Option D'],
+                                    correctAnswer: 0,
+                                    explanation: 'Based on NCERT content'
+                                }
+                            ];
+                        }
+                    }
+                }
+            }
+        }
         
         return {
             challenge,

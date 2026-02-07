@@ -8,7 +8,7 @@ class GeminiService {
         }
         
         this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        this.model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
     }
 
     /**
@@ -96,6 +96,30 @@ class GeminiService {
         } catch (error) {
             console.error('Error analyzing weakness:', error);
             throw new Error('Failed to analyze weakness');
+        }
+    }
+
+    /**
+     * Generate quiz questions for a given topic
+     */
+    async generateQuiz(quizData) {
+        try {
+            const { prompt } = quizData;
+            
+            console.log('Generating quiz with prompt length:', prompt.length);
+            
+            const result = await this.model.generateContent(prompt);
+            const response = await result.response;
+            const text = response.text();
+            
+            console.log('Gemini response received, length:', text.length);
+            
+            return text;
+            
+        } catch (error) {
+            console.error('Gemini API Error:', error.message);
+            console.error('Full error:', error);
+            throw new Error(`Gemini API Error: ${error.message}`);
         }
     }
 
