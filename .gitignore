@@ -68,5 +68,3 @@ dist-ssr
 /main.ts
 /ntuser.dat*
 /ntuser.ini
-/package-lock.json
-/package.json
