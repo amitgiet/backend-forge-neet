@@ -15,6 +15,12 @@ exports.createPath = async (req, res) => {
         });
     } catch (error) {
         console.error('Error creating learning path:', error);
+        if (error.message && error.message.includes('No NCERT content found')) {
+            return res.status(400).json({
+                success: false,
+                message: error.message
+            });
+        }
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to create learning path'

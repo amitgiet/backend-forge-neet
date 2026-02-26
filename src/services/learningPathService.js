@@ -22,6 +22,9 @@ class LearningPathService {
         
         // Generate content based on goals
         const generatedContent = await this.generateContentForGoals(goals);
+        if (!generatedContent || generatedContent.length === 0) {
+            throw new Error('No NCERT content found for selected goals. Try broader topics.');
+        }
         learningPath.generatedContent = generatedContent;
         learningPath.progress.totalItems = generatedContent.length;
         
@@ -101,6 +104,12 @@ class LearningPathService {
         const path = await LearningPath.findOne({ _id: pathId, userId });
         
         if (!path) throw new Error('Learning path not found');
+        if (contentIndex < 0 || contentIndex >= path.generatedContent.length) {
+            throw new Error('Invalid content index');
+        }
+        if (path.generatedContent[contentIndex].status === 'completed') {
+            return path;
+        }
         
         path.generatedContent[contentIndex].status = 'completed';
         path.progress.completedItems += 1;

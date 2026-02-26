@@ -8,6 +8,8 @@ const {
     logout,
     addExam,
     getDashboard,
+    getTodayProgress,
+    getTodayQuest,
     sendOtp,
     verifyOtpLogin,
     updateOnboarding
@@ -28,6 +30,8 @@ router.use(protect); // All routes below require authentication
 
 router.get('/me', getMe);
 router.get('/dashboard', getDashboard);
+router.get('/today-progress', getTodayProgress);
+router.get('/today-quest', getTodayQuest);
 router.put('/profile', updateProfile);
 router.put('/onboarding', updateOnboarding);
 router.put('/password', updatePassword);

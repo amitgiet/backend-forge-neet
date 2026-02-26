@@ -92,7 +92,7 @@ exports.completeQuiz = async (req, res) => {
     try {
         const userId = req.user._id;
         const { challengeId, dayNumber, quizIndex } = req.params;
-        const { score, timeSpent } = req.body;
+        const { score, timeSpent, correctAnswers, totalQuizzes } = req.body;
         
         const challenge = await challengeService.completeQuiz(
             challengeId,
@@ -100,7 +100,9 @@ exports.completeQuiz = async (req, res) => {
             parseInt(dayNumber),
             parseInt(quizIndex),
             score,
-            timeSpent
+            timeSpent,
+            correctAnswers,
+            totalQuizzes
         );
         
         res.json({

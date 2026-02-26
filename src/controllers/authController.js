@@ -1,12 +1,36 @@
 const User = require('../models/User');
+const StudySession = require('../models/StudySession');
+const TestAttempt = require('../models/TestAttempt');
+const GeneratedQuiz = require('../models/GeneratedQuiz');
+const Challenge = require('../models/Challenge');
 const ErrorResponse = require('../utils/errorResponse');
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 
 const crypto = require('crypto');
 
 // Helper to generate numeric OTP
 const generateOTP = () => {
     return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const formatMinutes = (minutes) => {
+    if (!minutes || minutes <= 0) return '0m';
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+
+    if (hours === 0) return `${remainingMinutes}m`;
+    if (remainingMinutes === 0) return `${hours}h`;
+    return `${hours}h ${remainingMinutes}m`;
+};
+
+const formatLocalDate = (dateValue) => {
+    const d = new Date(dateValue);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 // @desc    Register user
@@ -284,7 +308,6 @@ exports.addExam = async (req, res, next) => {
 exports.getDashboard = async (req, res, next) => {
     try {
         const user = await User.findById(req.user.id);
-        const TestAttempt = require('../models/TestAttempt');
         const StudyPlan = require('../models/StudyPlan');
 
         // Get recent test attempts
@@ -361,6 +384,224 @@ exports.getDashboard = async (req, res, next) => {
             data: dashboard
         });
 
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get today's progress stats for dashboard card
+// @route   GET /api/v1/auth/today-progress
+// @access  Private
+exports.getTodayProgress = async (req, res, next) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.user._id)) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    date: formatLocalDate(new Date()),
+                    studyTimeMinutes: 0,
+                    questionsAttempted: 0,
+                    correctAnswers: 0,
+                    accuracy: 0,
+                    formattedStudyTime: '0m'
+                }
+            });
+        }
+
+        const userId = new mongoose.Types.ObjectId(req.user._id);
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+
+        const [sessionAgg, testAgg, generatedQuizAgg] = await Promise.all([
+            StudySession.aggregate([
+                {
+                    $match: {
+                        userId,
+                        status: 'COMPLETED',
+                        startTime: { $gte: startOfDay, $lte: endOfDay }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        studyTimeMinutes: { $sum: { $ifNull: ['$duration', 0] } },
+                        questionsAttempted: { $sum: { $ifNull: ['$questionsSolved', 0] } }
+                    }
+                }
+            ]),
+            TestAttempt.aggregate([
+                {
+                    $match: {
+                        userId,
+                        status: 'submitted',
+                        submittedAt: { $gte: startOfDay, $lte: endOfDay }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        questionsAttempted: { $sum: { $ifNull: ['$results.attempted', 0] } },
+                        correctAnswers: { $sum: { $ifNull: ['$results.correct', 0] } },
+                        studyTimeSeconds: { $sum: { $ifNull: ['$results.timeAnalysis.totalTime', 0] } }
+                    }
+                }
+            ]),
+            GeneratedQuiz.aggregate([
+                { $match: { userId } },
+                { $unwind: '$attempts' },
+                {
+                    $match: {
+                        'attempts.userId': userId,
+                        'attempts.attemptDate': { $gte: startOfDay, $lte: endOfDay }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        questionsAttempted: { $sum: { $ifNull: ['$totalQuestions', 0] } },
+                        correctAnswers: { $sum: { $ifNull: ['$attempts.score', 0] } },
+                        studyTimeSeconds: { $sum: { $ifNull: ['$attempts.timeTaken', 0] } }
+                    }
+                }
+            ])
+        ]);
+
+        const sessionData = sessionAgg[0] || { studyTimeMinutes: 0, questionsAttempted: 0 };
+        const testData = testAgg[0] || { questionsAttempted: 0, correctAnswers: 0, studyTimeSeconds: 0 };
+        const generatedData = generatedQuizAgg[0] || { questionsAttempted: 0, correctAnswers: 0, studyTimeSeconds: 0 };
+
+        const studyTimeMinutes = Math.max(
+            0,
+            Math.round(
+                Number(sessionData.studyTimeMinutes || 0) +
+                Number(testData.studyTimeSeconds || 0) / 60 +
+                Number(generatedData.studyTimeSeconds || 0) / 60
+            )
+        );
+
+        const questionsAttempted = Math.max(
+            0,
+            Number(sessionData.questionsAttempted || 0) +
+            Number(testData.questionsAttempted || 0) +
+            Number(generatedData.questionsAttempted || 0)
+        );
+
+        const correctAnswers = Math.max(
+            0,
+            Number(testData.correctAnswers || 0) +
+            Number(generatedData.correctAnswers || 0)
+        );
+
+        const accuracyBase = Number(testData.questionsAttempted || 0) + Number(generatedData.questionsAttempted || 0);
+        const accuracy = accuracyBase > 0 ? Math.round((correctAnswers / accuracyBase) * 100) : 0;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                date: formatLocalDate(startOfDay),
+                studyTimeMinutes,
+                questionsAttempted,
+                correctAnswers,
+                accuracy,
+                formattedStudyTime: formatMinutes(studyTimeMinutes)
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get today's quest progress for dashboard card
+// @route   GET /api/v1/auth/today-quest
+// @access  Private
+exports.getTodayQuest = async (req, res, next) => {
+    try {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+
+        const challenge = await Challenge.findOne({
+            userId: req.user.id,
+            isActive: true,
+            status: 'active',
+            startDate: { $lte: endOfDay },
+            endDate: { $gte: startOfDay }
+        }).sort({ createdAt: -1 });
+
+        if (!challenge) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    hasQuest: false,
+                    title: "Today's Quest",
+                    xpReward: 0,
+                    completedQuizzes: 0,
+                    targetQuizzes: 0,
+                    progressPercentage: 0,
+                    stats: {
+                        minutesStudied: 0,
+                        questions: 0,
+                        accuracy: 0
+                    }
+                }
+            });
+        }
+
+        const scheduleByDate = challenge.dailySchedule.find((schedule) => {
+            const d = new Date(schedule.date);
+            d.setHours(0, 0, 0, 0);
+            return d.getTime() === startOfDay.getTime() && schedule.isUnlocked;
+        });
+
+        const todaySchedule = scheduleByDate || challenge.dailySchedule.find(s => s.isUnlocked && !s.isCompleted);
+        const quizzes = todaySchedule?.quizzes || [];
+        const completedQuizzes = quizzes.filter(q => q.isCompleted);
+
+        const targetQuizzes = Number(todaySchedule?.targetQuizzes || quizzes.length || 0);
+        const completedCount = completedQuizzes.length;
+        const progressPercentage = targetQuizzes > 0
+            ? Math.round((completedCount / targetQuizzes) * 100)
+            : 0;
+
+        const minutesStudied = Math.round(
+            completedQuizzes.reduce((sum, q) => sum + (Number(q.timeSpent || 0) / 60), 0)
+        );
+
+        const questions = completedQuizzes.reduce((sum, q) => {
+            if (Array.isArray(q.questions) && q.questions.length > 0) {
+                return sum + q.questions.length;
+            }
+            return sum + 4;
+        }, 0);
+
+        const accuracy = completedCount > 0
+            ? Math.round(completedQuizzes.reduce((sum, q) => sum + Number(q.score || 0), 0) / completedCount)
+            : 0;
+
+        const xpReward = targetQuizzes * 30;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                hasQuest: true,
+                challengeId: challenge._id,
+                title: challenge.title || "Today's Quest",
+                xpReward,
+                completedQuizzes: completedCount,
+                targetQuizzes,
+                progressPercentage,
+                stats: {
+                    minutesStudied: Math.max(0, minutesStudied),
+                    questions: Math.max(0, questions),
+                    accuracy: Math.max(0, accuracy)
+                }
+            }
+        });
     } catch (error) {
         next(error);
     }

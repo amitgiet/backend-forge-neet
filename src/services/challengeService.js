@@ -1,5 +1,6 @@
 const Challenge = require('../models/Challenge');
 const NCERTLine = require('../models/NCERTLine');
+const NeuronzService = require('./neuronzService');
 
 class ChallengeService {
     async createChallenge(userId, challengeData) {
@@ -156,7 +157,7 @@ class ChallengeService {
         };
     }
 
-    async completeQuiz(challengeId, userId, dayNumber, quizIndex, score, timeSpent) {
+    async completeQuiz(challengeId, userId, dayNumber, quizIndex, score, timeSpent, correctAnswers, totalQuizzes) {
         const challenge = await Challenge.findOne({ _id: challengeId, userId });
         
         if (!challenge) throw new Error('Challenge not found');
@@ -173,6 +174,29 @@ class ChallengeService {
         quiz.completedAt = new Date();
         quiz.score = score;
         quiz.timeSpent = timeSpent;
+
+        const resolvedTotal = Number.isFinite(totalQuizzes) && totalQuizzes > 0
+            ? totalQuizzes
+            : (Array.isArray(quiz.questions) && quiz.questions.length > 0 ? quiz.questions.length : 4);
+
+        const resolvedCorrect = Number.isFinite(correctAnswers)
+            ? Math.max(0, Math.min(resolvedTotal, correctAnswers))
+            : Math.max(0, Math.min(resolvedTotal, Math.round(((score || 0) / 100) * resolvedTotal)));
+
+        // Keep NeuronZ progression in sync when a challenge quiz is completed.
+        if (quiz.lineId) {
+            try {
+                await NeuronzService.processLineSession(
+                    userId,
+                    String(quiz.lineId),
+                    resolvedCorrect,
+                    resolvedTotal,
+                    timeSpent || 0
+                );
+            } catch (neuronzError) {
+                console.error('Failed to sync challenge completion with NeuronZ:', neuronzError.message);
+            }
+        }
         
         daySchedule.completedQuizzes += 1;
         

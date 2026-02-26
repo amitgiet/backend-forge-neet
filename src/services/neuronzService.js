@@ -15,6 +15,48 @@ class NeuronzService {
     };
 
     /**
+     * Resolve NCERT line by either Mongo _id or business lineId.
+     */
+    static async resolveNCERTLine(lineIdentifier) {
+        if (!lineIdentifier) return null;
+
+        let ncertLine = null;
+        const lineValue = String(lineIdentifier);
+
+        if (mongoose.Types.ObjectId.isValid(lineValue)) {
+            ncertLine = await NCERTLine.findById(lineValue);
+        }
+
+        if (!ncertLine) {
+            ncertLine = await NCERTLine.findOne({ lineId: lineValue });
+        }
+
+        return ncertLine;
+    }
+
+    /**
+     * Resolve UserLine by supporting both NCERT _id-based and lineId-based records.
+     */
+    static async resolveUserLine(userId, lineIdentifier) {
+        if (!lineIdentifier) return null;
+
+        const lineValue = String(lineIdentifier);
+        let userLine = await UserLine.findOne({ userId, lineId: lineValue });
+        if (userLine) return userLine;
+
+        const ncertLine = await this.resolveNCERTLine(lineValue);
+        if (!ncertLine) return null;
+
+        const candidates = [String(ncertLine._id), ncertLine.lineId];
+        userLine = await UserLine.findOne({
+            userId,
+            lineId: { $in: candidates }
+        });
+
+        return userLine;
+    }
+
+    /**
      * Get due NCERT lines for user (Due Today dashboard)
      */
     static async getDueLines(userId, userPlan = 'free') {
@@ -24,15 +66,74 @@ class NeuronzService {
             console.log(`[getDueLines] Fetching due lines for userId: ${userId}`);
 
             const dueLines = await UserLine.getDueLines(userId, limit);
+            const lineIdentifiers = dueLines.map(ul => String(ul.lineId));
 
-            console.log(`[getDueLines] Found ${dueLines.length} due lines`);
+            const objectIdKeys = lineIdentifiers.filter(id => mongoose.Types.ObjectId.isValid(id));
+            const businessKeys = lineIdentifiers.filter(id => !mongoose.Types.ObjectId.isValid(id));
+
+            const [byObjectIds, byBusinessIds] = await Promise.all([
+                objectIdKeys.length > 0
+                    ? NCERTLine.find({ _id: { $in: objectIdKeys } }).select('lineId ncertText subject chapter class book')
+                    : [],
+                businessKeys.length > 0
+                    ? NCERTLine.find({ lineId: { $in: businessKeys } }).select('lineId ncertText subject chapter class book')
+                    : []
+            ]);
+
+            const lineMap = new Map();
+            [...byObjectIds, ...byBusinessIds].forEach(line => {
+                lineMap.set(String(line._id), line.toObject());
+                lineMap.set(String(line.lineId), line.toObject());
+            });
+
+            const enrichedLines = dueLines.map(ul => {
+                const item = ul.toObject();
+                const matchedLine = lineMap.get(String(item.lineId));
+                if (matchedLine) {
+                    item.lineId = matchedLine;
+                }
+                return item;
+            });
+
+            // Deduplicate same NCERT content represented by legacy/new lineId formats.
+            const uniqueLineMap = new Map();
+            for (const item of enrichedLines) {
+                const canonicalKey =
+                    item.lineId && typeof item.lineId === 'object' && item.lineId._id
+                        ? String(item.lineId._id)
+                        : String(item.lineId);
+
+                const existing = uniqueLineMap.get(canonicalKey);
+                if (!existing) {
+                    uniqueLineMap.set(canonicalKey, item);
+                    continue;
+                }
+
+                // Prefer higher level; tie-breaker by most recently reviewed.
+                const existingReviewed = new Date(existing.lastReviewed || 0).getTime();
+                const currentReviewed = new Date(item.lastReviewed || 0).getTime();
+                const shouldReplace =
+                    (item.level || 0) > (existing.level || 0) ||
+                    ((item.level || 0) === (existing.level || 0) && currentReviewed > existingReviewed);
+
+                if (shouldReplace) {
+                    uniqueLineMap.set(canonicalKey, item);
+                }
+            }
+
+            const uniqueLines = Array.from(uniqueLineMap.values()).sort((a, b) => {
+                if ((a.level || 0) !== (b.level || 0)) return (a.level || 0) - (b.level || 0);
+                return new Date(b.lastReviewed || 0).getTime() - new Date(a.lastReviewed || 0).getTime();
+            });
+
+            console.log(`[getDueLines] Found ${uniqueLines.length} due lines`);
 
             // Group by level for UI display
             const groupedByLevel = {
                 L1: [], L2: [], L3: [], L4: [], L5: [], L6: [], L7: []
             };
 
-            dueLines.forEach(ul => {
+            uniqueLines.forEach(ul => {
                 const levelKey = `L${ul.level}`;
                 if (groupedByLevel[levelKey]) {
                     groupedByLevel[levelKey].push(ul);
@@ -40,11 +141,11 @@ class NeuronzService {
             });
 
             return {
-                total: dueLines.length,
+                total: uniqueLines.length,
                 byLevel: groupedByLevel,
-                lines: dueLines,
+                lines: uniqueLines,
                 dailyLimit: limit,
-                limitReached: dueLines.length >= limit && userPlan === 'free'
+                limitReached: uniqueLines.length >= limit && userPlan === 'free'
             };
 
         } catch (error) {
@@ -58,13 +159,35 @@ class NeuronzService {
      */
     static async processLineSession(userId, lineId, correctAnswers, totalQuizzes = 4, timeSpent = 0) {
         try {
-            const userLine = await UserLine.createOrUpdate(
+            const ncertLine = await this.resolveNCERTLine(lineId);
+            const canonicalLineId = ncertLine ? String(ncertLine._id) : String(lineId);
+            const duplicateKeys = ncertLine ? [String(ncertLine._id), String(ncertLine.lineId)] : [String(lineId)];
+
+            let userLine = await UserLine.findOne({ userId, lineId: canonicalLineId });
+            if (!userLine) {
+                userLine = await this.resolveUserLine(userId, lineId);
+            }
+            if (!userLine) {
+                userLine = new UserLine({ userId, lineId: canonicalLineId });
+            }
+
+            userLine.updateLevel(correctAnswers, totalQuizzes, timeSpent);
+            userLine.lineId = canonicalLineId;
+            await userLine.save();
+
+            // Remove legacy duplicates for the same NCERT line representation.
+            const duplicateRows = await UserLine.find({
                 userId,
-                lineId,
-                correctAnswers,
-                totalQuizzes,
-                timeSpent
-            );
+                lineId: { $in: duplicateKeys }
+            }).select('_id');
+
+            const duplicateIdsToDelete = duplicateRows
+                .map(row => String(row._id))
+                .filter(id => id !== String(userLine._id));
+
+            if (duplicateIdsToDelete.length > 0) {
+                await UserLine.deleteMany({ _id: { $in: duplicateIdsToDelete } });
+            }
 
             // Update user's daily progress
             await this.updateUserDailyProgress(userId, correctAnswers, totalQuizzes);
@@ -88,7 +211,7 @@ class NeuronzService {
      */
     static async generateMicroQuizzes(lineId) {
         try {
-            const ncertLine = await NCERTLine.findOne({ lineId });
+            const ncertLine = await this.resolveNCERTLine(lineId);
             if (!ncertLine) {
                 throw new Error('NCERT line not found');
             }
@@ -251,7 +374,7 @@ class NeuronzService {
      */
     static async resetLineLevel(userId, lineId) {
         try {
-            const userLine = await UserLine.findOne({ userId, lineId });
+            const userLine = await this.resolveUserLine(userId, lineId);
             if (!userLine) {
                 throw new Error('Line not found for user');
             }
@@ -396,10 +519,7 @@ class NeuronzService {
 
             // Create or update UserLine for each NCERT line
             for (const ncertLine of ncertLines) {
-                const existingUserLine = await UserLine.findOne({
-                    userId,
-                    lineId: ncertLine._id // Use MongoDB _id
-                });
+                const existingUserLine = await this.resolveUserLine(userId, String(ncertLine._id));
 
                 if (!existingUserLine) {
                     // Create new UserLine entry at Level 1
@@ -503,11 +623,9 @@ class NeuronzService {
             console.log(`[trackBySubjectAndTopic] Creating UserLine entries for ${ncertLines.length} NCERT lines`);
 
             // Create UserLine entries for each NCERT line at Level 1
+            // Do not reset existing progress unless explicitly requested.
             for (const ncertLine of ncertLines) {
-                const existingUserLine = await UserLine.findOne({
-                    userId,
-                    lineId: ncertLine._id // Use MongoDB _id, not the lineId string
-                });
+                const existingUserLine = await this.resolveUserLine(userId, String(ncertLine._id));
 
                 if (!existingUserLine) {
                     const newUserLine = new UserLine({
@@ -522,15 +640,6 @@ class NeuronzService {
                     
                     await newUserLine.save();
                     createdUserLines.push(newUserLine);
-                    addedCount++;
-                } else {
-                    // If line already exists, reset it to L1 and make it due today
-                    existingUserLine.level = 1;
-                    existingUserLine.nextRevision = new Date();
-                    existingUserLine.lastReviewed = new Date();
-                    existingUserLine.streak = 0;
-                    existingUserLine.isMastered = false;
-                    await existingUserLine.save();
                     addedCount++;
                 }
             }
@@ -556,7 +665,7 @@ class NeuronzService {
      */
     static async adjustLineLevel(userId, lineId, newLevel, reason = 'user-request') {
         try {
-            const userLine = await UserLine.findOne({ userId: new mongoose.Types.ObjectId(userId), lineId });
+            const userLine = await this.resolveUserLine(new mongoose.Types.ObjectId(userId), lineId);
             if (!userLine) {
                 throw new Error('Line not found');
             }
@@ -600,7 +709,7 @@ class NeuronzService {
      */
     static async customizeLineSchedule(userId, lineId, priority, customSchedule, autoSkipL7) {
         try {
-            const userLine = await UserLine.findOne({ userId: new mongoose.Types.ObjectId(userId), lineId });
+            const userLine = await this.resolveUserLine(new mongoose.Types.ObjectId(userId), lineId);
             if (!userLine) {
                 throw new Error('Line not found');
             }
@@ -640,10 +749,16 @@ class NeuronzService {
      */
     static async getLineAnalytics(userId, lineId) {
         try {
-            const userLine = await UserLine.findOne({ userId: new mongoose.Types.ObjectId(userId), lineId }).populate('lineId');
+            const userLine = await this.resolveUserLine(new mongoose.Types.ObjectId(userId), lineId);
             if (!userLine) {
                 throw new Error('Line not found');
             }
+
+            await userLine.populate({
+                path: 'lineId',
+                select: 'ncertText subject chapter class book',
+                options: { strictPopulate: false }
+            });
 
             const { quizHistory, totalQuizzesSolved, totalCorrectAnswers, level, isMastered } = userLine;
 
