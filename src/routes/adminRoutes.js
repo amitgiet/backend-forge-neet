@@ -1,5 +1,11 @@
 const express = require('express');
-const { createQuestion, createTopic, getAdminStats } = require('../controllers/adminController');
+const {
+  createQuestion,
+  createTopic,
+  getAdminStats,
+  updateChapterContentSource,
+  updateTopicContentSource
+} = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
 
@@ -14,6 +20,8 @@ router.use(protect);
 
 router.post('/questions', createQuestion);
 router.post('/topics', createTopic);
+router.patch('/chapters/:chapterId/content', updateChapterContentSource);
+router.patch('/topics/:topicId/content', updateTopicContentSource);
 router.get('/stats', getAdminStats);
 
 module.exports = router;

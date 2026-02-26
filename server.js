@@ -151,6 +151,7 @@ app.use(`/api/${API_VERSION}/revisions`, require('./src/routes/revisionRoutes'))
 app.use(`/api/${API_VERSION}/tests`, require('./src/routes/testRoutes'));
 app.use(`/api/${API_VERSION}/quiz-generator`, require('./src/routes/quizGeneratorRoutes'));
 app.use(`/api/${API_VERSION}/daily-challenge`, require('./src/routes/dailyChallengeRoutes'));
+app.use(`/api/${API_VERSION}/ncert-search`, require('./src/routes/ncertSearchRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

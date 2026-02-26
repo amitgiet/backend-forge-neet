@@ -72,6 +72,39 @@ const ChapterSchema = new mongoose.Schema({
     isPYQHotspot: { type: Boolean, default: false }
   }],
 
+  // External source (NCERT URL/PDF/text page)
+  contentSource: {
+    en: {
+      resourceType: {
+        type: String,
+        enum: ['pdf', 'text', 'html', 'external']
+      },
+      resourceUrl: {
+        type: String,
+        trim: true
+      }
+    },
+    hi: {
+      resourceType: {
+        type: String,
+        enum: ['pdf', 'text', 'html', 'external']
+      },
+      resourceUrl: {
+        type: String,
+        trim: true
+      }
+    },
+    // Backward compatibility for previously stored single-shape contentSource
+    resourceType: {
+      type: String,
+      enum: ['pdf', 'text', 'html', 'external']
+    },
+    resourceUrl: {
+      type: String,
+      trim: true
+    }
+  },
+
   // Prerequisites (for learning path)
   prerequisites: [{ type: String }], // Array of chapterIds
 

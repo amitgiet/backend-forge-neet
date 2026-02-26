@@ -31,6 +31,38 @@ const TopicSchema = new mongoose.Schema({
         pageNumber: Number,
         lineRange: String
     },
+    // Optional direct resource for this topic; chapter-level source is fallback
+    contentSource: {
+        en: {
+            resourceType: {
+                type: String,
+                enum: ['pdf', 'text', 'html', 'external']
+            },
+            resourceUrl: {
+                type: String,
+                trim: true
+            }
+        },
+        hi: {
+            resourceType: {
+                type: String,
+                enum: ['pdf', 'text', 'html', 'external']
+            },
+            resourceUrl: {
+                type: String,
+                trim: true
+            }
+        },
+        // Backward compatibility for previously stored single-shape contentSource
+        resourceType: {
+            type: String,
+            enum: ['pdf', 'text', 'html', 'external']
+        },
+        resourceUrl: {
+            type: String,
+            trim: true
+        }
+    },
     stats: {
         totalQuestions: { type: Number, default: 0 },
         avgAccuracy: { type: Number, default: 0 }
