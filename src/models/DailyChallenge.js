@@ -45,7 +45,7 @@ const dailyChallengeSchema = new mongoose.Schema({
   // Reference to GeneratedQuiz that contains the actual questions
   quizId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'GeneratedQuiz',
+    ref: 'QuizMeta',
     required: false
   },
   description: String,

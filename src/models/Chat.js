@@ -23,6 +23,27 @@ const ChatSchema = new mongoose.Schema({
         ref: 'User'
     },
     
+    messages: [{
+        sender: { type: String, enum: ['user', 'ai'], default: 'user' },
+        content: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now }
+    }],
+
+    // Rolling memory for AI chats (optional; safe for non-AI chats too)
+    summary: {
+        type: String,
+        default: ''
+    },
+
+    messagesSinceSummary: {
+        type: Number,
+        default: 0
+    },
+
+    summaryUpdatedAt: {
+        type: Date
+    },
+    
     lastMessage: {
         text: String,
         sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

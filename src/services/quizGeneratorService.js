@@ -1,6 +1,6 @@
-const GeminiService = require("./geminiService");
-const GeneratedQuiz = require("../models/GeneratedQuiz");
 const mongoose = require("mongoose");
+const QuizFactoryService = require("./quizFactoryService");
+const QuizMeta = require("../models/QuizMeta");
 
 class QuizGeneratorService {
   /**
@@ -14,211 +14,52 @@ class QuizGeneratorService {
     quizType = "mcq",
   ) {
     try {
-      const geminiService = new GeminiService();
+      const inferSubject = (text) => {
+        const t = String(text || "").toLowerCase();
+        if (t.includes("organic") || t.includes("inorganic") || t.includes("chem")) return "chemistry";
+        if (t.includes("photosynthesis") || t.includes("genetics") || t.includes("reproduction") || t.includes("biology") || t.includes("cell")) return "biology";
+        if (t.includes("mechanics") || t.includes("thermo") || t.includes("electric") || t.includes("magnet") || t.includes("physics")) return "physics";
+        return "physics";
+      };
 
-      // Step 1: Generate question texts/types only
-      const questionTextPrompt = `Generate ${numberOfQuestions} NEET exam-style ${quizType} questions about "${topic}" at difficulty level ${level}.
+      const subject = inferSubject(topic);
+      const difficulty =
+        Number(level) <= 2 ? "easy" : Number(level) <= 4 ? "medium" : "hard";
 
-Context: These are for NEET aspirants (medical entrance exam). Focus on NCERT-based content from Physics, Chemistry, or Biology.
+      const { chapterId, questionIds } =
+        await QuizFactoryService.generateQuestionsWithAI({
+          subject,
+          topic,
+          count: numberOfQuestions,
+          difficulty,
+          examTypes: ["NEET_UG"],
+        });
 
-Return ONLY valid JSON, no markdown, no explanation, no extra text. The response must start with { and end with }. Format:
-{
-  "questions": [
-    {
-      "question": "Question text here",
-      "questionType": "${quizType}"
-    }
-  ]
-}
-
-Requirements:
-- Each question should test conceptual understanding
-- Questions should be based on NCERT curriculum
-- Include questions that test application and analysis
-- Vary the difficulty within the specified level`;
-      const aiQuestionsResponse = await geminiService.generateQuiz({
-        prompt: questionTextPrompt,
-      });
-      let parsedQuestions;
-      try {
-        parsedQuestions = JSON.parse(aiQuestionsResponse.trim()).questions;
-      } catch (e) {
-        // Fallback: try to extract first {...} block
-        console.error(
-          "Failed to parse question texts from AI. Raw response:",
-          aiQuestionsResponse,
-        );
-        const match = aiQuestionsResponse.match(/\{[\s\S]*\}/);
-        if (match) {
-          try {
-            parsedQuestions = JSON.parse(match[0]).questions;
-          } catch (e2) {
-            throw new Error(
-              "Failed to parse question texts from AI (even after extraction)",
-            );
-          }
-        } else {
-          throw new Error(
-            "Failed to parse question texts from AI (no JSON found)",
-          );
-        }
-      }
-
-      // Step 2: For each question, generate options/answers in parallel
-      const questionDetails = await Promise.all(
-        parsedQuestions.map(async (q, idx) => {
-          let detailPrompt = "";
-
-          if (q.questionType === "multiple_select") {
-            detailPrompt = `For NEET exam preparation, complete this multiple select question. Provide ONLY valid JSON with exactly 4 plausible options, correctAnswers as an array of indices (2-3 correct answers), a detailed explanation with concept reference, difficulty (easy/medium/hard), and marks (default 1):
-
-Question: "${q.question}"
-
-Requirements for NEET:
-- All 4 options should be scientifically plausible
-- 2-3 options are correct (not all 4, not just 1)
-- Wrong options represent common misconceptions
-- Explanation should reference relevant NCERT concepts, formulas, or principles
-- Format exactly as:
-{
-  "question": "${q.question}",
-  "questionType": "multiple_select",
-  "options": ["Option A", "Option B", "Option C", "Option D"],
-  "correctAnswers": [0, 2],
-  "explanation": "Detailed explanation with concept references",
-  "difficulty": "medium",
-  "marks": 1
-}`;
-          } else {
-            // MCQ (default)
-            detailPrompt = `For NEET exam preparation, complete this MCQ question. Provide ONLY valid JSON with exactly 4 plausible options, correctAnswer as the index (0-3), a detailed explanation with concept reference, difficulty (easy/medium/hard), and marks (default 1):
-
-Question: "${q.question}"
-
-Requirements for NEET:
-- Exactly ONE correct answer
-- All 4 options should be scientifically plausible
-- Wrong options should represent common errors, misconceptions, or calculation mistakes
-- Explanation should reference relevant NCERT concepts, formulas, or principles
-- Include why other options are incorrect if helpful
-- Format exactly as:
-{
-  "question": "${q.question}",
-  "questionType": "mcq",
-  "options": ["Option A", "Option B", "Option C", "Option D"],
-  "correctAnswer": 0,
-  "explanation": "Detailed explanation with concept references and why others are wrong",
-  "difficulty": "medium",
-  "marks": 1
-}`;
-          }
-
-          const aiDetailResponse = await geminiService.generateQuiz({
-            prompt: detailPrompt,
-          });
-          let detailObj;
-          try {
-            detailObj = JSON.parse(aiDetailResponse.trim());
-          } catch (e) {
-            // fallback: return minimal question
-            detailObj = {
-              question: q.question,
-              questionType: q.questionType,
-              options: [],
-              correctAnswer: null,
-              correctAnswers: [],
-              explanation: "AI failed to parse",
-              difficulty: "medium",
-              marks: 1,
-            };
-          }
-
-          // Robustness: ensure all required fields
-          if (
-            !Array.isArray(detailObj.options) ||
-            detailObj.options.length !== 4
-          ) {
-            detailObj.options = [
-              "Option A",
-              "Option B",
-              "Option C",
-              "Option D",
-            ];
-          }
-
-          // Ensure correct answer/answers are set
-          if (detailObj.questionType === "multiple_select") {
-            if (
-              !Array.isArray(detailObj.correctAnswers) ||
-              detailObj.correctAnswers.length === 0
-            ) {
-              detailObj.correctAnswers = [0, 2]; // Default: options A and C
-            }
-          } else {
-            if (
-              typeof detailObj.correctAnswer !== "number" ||
-              detailObj.correctAnswer < 0 ||
-              detailObj.correctAnswer > 3
-            ) {
-              detailObj.correctAnswer = 0; // Default: option A
-            }
-          }
-
-          return {
-            questionNumber: idx + 1,
-            question: detailObj.question,
-            questionType: detailObj.questionType || "mcq",
-            options: detailObj.options || [],
-            correctAnswer:
-              detailObj.correctAnswer !== undefined
-                ? detailObj.correctAnswer
-                : null,
-            correctAnswers: detailObj.correctAnswers || [],
-            explanation: detailObj.explanation || "Explanation not provided",
-            topic: topic,
-            difficulty: detailObj.difficulty || "medium",
-            marks: detailObj.marks || 1,
-          };
-        }),
-      );
-
-      // Create the GeneratedQuiz document
-      const generatedQuiz = new GeneratedQuiz({
-        userId,
+      const quiz = await QuizFactoryService.createQuiz({
+        ownerUserId: userId,
         topic,
-        subject: "general",
-        level,
+        subject,
+        chapterId,
+        source: "quiz-generator",
         quizType,
-        questions: questionDetails,
-        totalQuestions: questionDetails.length,
-        aiModel: "gemini-2.5-flash-lite",
-        tags: [topic.toLowerCase()],
+        level,
+        difficulty,
+        questionIds,
         isPublished: true,
+        tags: [String(topic || "").toLowerCase()].filter(Boolean),
       });
 
-      // Save to database and wait for it (ensures ID is valid)
-      const savedQuiz = await generatedQuiz.save();
-
-      console.log("[QuizGenerator] Quiz saved to DB successfully:", {
-        quizId: savedQuiz._id.toString(),
-        userId: savedQuiz.userId,
-        topic: savedQuiz.topic,
-        totalQuestions: savedQuiz.totalQuestions,
-        timestamp: new Date().toISOString(),
-      });
-
-      // Return quiz data to frontend with confirmed DB-persisted ID
+      const payload = await this.getQuizById(quiz._id.toString());
       return {
         success: true,
-        _id: savedQuiz._id.toString(), // Return as string ID
-        quizId: savedQuiz._id.toString(), // Also include as quizId for compatibility
-        topic: savedQuiz.topic,
-        level: savedQuiz.level,
-        totalQuestions: savedQuiz.totalQuestions,
-        totalMarks: savedQuiz.totalMarks,
-        duration: savedQuiz.duration,
-        questions: savedQuiz.questions,
-        message: `Quiz generated successfully with ${questionDetails.length} questions`,
+        _id: quiz._id.toString(),
+        quizId: quiz._id.toString(),
+        topic: quiz.topic,
+        level: quiz.level,
+        totalQuestions: quiz.totalQuestions,
+        duration: quiz.duration,
+        questions: payload.questions,
+        message: `Quiz generated successfully with ${quiz.totalQuestions} questions`,
       };
     } catch (error) {
       console.error("Quiz generation error:", error.message);
@@ -326,11 +167,35 @@ REQUIREMENTS FOR NEET-STYLE QUESTIONS:
    */
   static async getQuizById(quizId) {
     try {
-      const quiz = await GeneratedQuiz.findById(quizId);
-      if (!quiz) {
-        throw new Error("Quiz not found");
-      }
-      return quiz;
+      const result = await QuizFactoryService.getQuizWithQuestions(quizId);
+      if (!result?.quiz) throw new Error("Quiz not found");
+
+      const { quiz, questions } = result;
+
+      // Convert canonical Question docs to legacy quiz question shape expected by frontend.
+      const legacyQuestions = questions.map((q, idx) => {
+        const opts = Array.isArray(q.options) ? q.options : [];
+        const optionTexts = opts.map((o) => o?.text?.en || "");
+        const correctKey = q.correctAnswer;
+        const correctIndex = opts.findIndex((o) => o?.key === correctKey);
+        return {
+          questionNumber: idx + 1,
+          question: q.question?.en || "",
+          questionType: "mcq",
+          options: optionTexts,
+          correctAnswer: correctIndex >= 0 ? correctIndex : 0,
+          correctAnswers: [],
+          explanation: q.explanation?.en || "",
+          topic: quiz.topic,
+          difficulty: q.difficulty || "medium",
+          marks: 1,
+        };
+      });
+
+      return {
+        ...quiz,
+        questions: legacyQuestions,
+      };
     } catch (error) {
       throw new Error(`Failed to fetch quiz: ${error.message}`);
     }
@@ -351,12 +216,12 @@ REQUIREMENTS FOR NEET-STYLE QUESTIONS:
         timestamp: new Date().toISOString(),
       });
 
-      const quizzes = await GeneratedQuiz.find({ userId })
+      const quizzes = await QuizMeta.find({ ownerUserId: userId })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
 
-      const total = await GeneratedQuiz.countDocuments({ userId });
+      const total = await QuizMeta.countDocuments({ ownerUserId: userId });
 
       console.log("[getUserQuizzes] Query results:", {
         userId: userId.toString(),
@@ -399,81 +264,63 @@ REQUIREMENTS FOR NEET-STYLE QUESTIONS:
         throw new Error("Invalid quiz ID format");
       }
 
-      const quiz = await GeneratedQuiz.findById(quizId);
-      if (!quiz) {
-        throw new Error(`Quiz with ID ${quizId} not found`);
-      }
+      const fetched = await this.getQuizById(quizId);
+      if (!fetched) throw new Error(`Quiz with ID ${quizId} not found`);
 
-      // Calculate score
+      const questions = fetched.questions || [];
+      const totalMarks = questions.length;
       let score = 0;
-      const evaluatedAnswers = quiz.questions.map((q, index) => {
+
+      const evaluatedAnswers = questions.map((q, index) => {
         const userAnswer = answers[index];
-        let isCorrect = false;
-
-        // Handle null/undefined answers (unanswered questions)
-        if (userAnswer === null || userAnswer === undefined) {
-          return {
-            questionNumber: index + 1,
-            userAnswer: null,
-            correctAnswer: q.correctAnswer || q.correctAnswers,
-            isCorrect: false,
-            marks: 0,
-          };
-        }
-
-        if (q.questionType === "multiple_select") {
-          // Multiple correct answers - compare arrays
-          isCorrect =
-            Array.isArray(userAnswer) &&
-            Array.isArray(q.correctAnswers) &&
-            JSON.stringify(userAnswer.sort()) ===
-              JSON.stringify(q.correctAnswers.sort());
-        } else {
-          // MCQ - single answer
-          isCorrect = Number(userAnswer) === Number(q.correctAnswer);
-        }
-
-        if (isCorrect) {
-          score += q.marks || 1;
-        }
-
+        const correctAnswer = q.correctAnswer;
+        const isCorrect = userAnswer !== null && userAnswer !== undefined
+          ? Number(userAnswer) === Number(correctAnswer)
+          : false;
+        if (isCorrect) score += 1;
         return {
           questionNumber: index + 1,
-          userAnswer,
-          correctAnswer: q.correctAnswer || q.correctAnswers,
+          userAnswer: userAnswer ?? null,
+          correctAnswer,
           isCorrect,
-          marks: isCorrect ? q.marks || 1 : 0,
+          marks: isCorrect ? 1 : 0,
         };
       });
 
-      const percentage = Math.round((score / quiz.totalMarks) * 100);
+      const percentage = totalMarks > 0 ? Math.round((score / totalMarks) * 100) : 0;
 
-      // Save attempt
-      quiz.attempts.push({
-        userId: new mongoose.Types.ObjectId(userId),
-        attemptDate: new Date(),
-        score,
-        percentage,
-        timeTaken,
-        answers,
-      });
+      // Zero-based indexes of questions answered incorrectly in this attempt.
+      const wrongQuestionIndexes = evaluatedAnswers
+        .map((ea, index) => (!ea.isCorrect ? index : -1))
+        .filter((index) => index >= 0);
 
-      quiz.totalAttempts += 1;
-
-      // Update average score
-      const totalScore = quiz.attempts.reduce((sum, a) => sum + a.score, 0);
-      quiz.avgScore = Math.round(totalScore / quiz.totalAttempts);
-
-      await quiz.save();
+      // Update aggregate stats
+      const quizDoc = await QuizMeta.findById(quizId);
+      if (quizDoc) {
+        quizDoc.attempts = Array.isArray(quizDoc.attempts) ? quizDoc.attempts : [];
+        quizDoc.attempts.push({
+          userId: new mongoose.Types.ObjectId(userId),
+          attemptDate: new Date(),
+          score,
+          totalQuestions: totalMarks,
+          percentage,
+          timeTaken: timeTaken || 0,
+          wrongQuestionIndexes
+        });
+        quizDoc.totalAttempts = (quizDoc.totalAttempts || 0) + 1;
+        const totalScore = quizDoc.attempts.reduce((sum, a) => sum + (a.score || 0), 0);
+        quizDoc.avgScore = quizDoc.totalAttempts > 0 ? Math.round(totalScore / quizDoc.totalAttempts) : 0;
+        await quizDoc.save();
+      }
 
       return {
         quizId,
         score,
-        totalMarks: quiz.totalMarks,
+        totalMarks,
         percentage,
         timeTaken,
         evaluatedAnswers,
-        message: `Quiz submitted successfully! Score: ${score}/${quiz.totalMarks} (${percentage}%)`,
+        message: `Quiz submitted successfully! Score: ${score}/${totalMarks} (${percentage}%)`,
       };
     } catch (error) {
       throw new Error(`Failed to submit quiz: ${error.message}`);
@@ -485,17 +332,17 @@ REQUIREMENTS FOR NEET-STYLE QUESTIONS:
    */
   static async deleteQuiz(quizId, userId) {
     try {
-      const quiz = await GeneratedQuiz.findById(quizId);
+      const quiz = await QuizMeta.findById(quizId);
       if (!quiz) {
         throw new Error("Quiz not found");
       }
 
       // Check ownership
-      if (quiz.userId.toString() !== userId.toString()) {
+      if (quiz.ownerUserId?.toString() !== userId.toString()) {
         throw new Error("Unauthorized: You can only delete your own quizzes");
       }
 
-      await GeneratedQuiz.findByIdAndDelete(quizId);
+      await QuizMeta.findByIdAndDelete(quizId);
       return { success: true, message: "Quiz deleted successfully" };
     } catch (error) {
       throw new Error(`Failed to delete quiz: ${error.message}`);

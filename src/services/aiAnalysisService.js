@@ -10,7 +10,7 @@ class AIAnalysisService {
     constructor() {
         if (process.env.GEMINI_API_KEY && process.env.ENABLE_AI_ANALYSIS === 'true') {
             this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-            this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+            this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
             this.enabled = true;
         } else {
             this.enabled = false;
@@ -38,6 +38,93 @@ class AIAnalysisService {
         } catch (error) {
             console.error('AI Analysis error:', error);
             return this.getFallbackAnalysis(testAttempt);
+        }
+    }
+
+    /**
+     * Analyze a single quiz attempt summary (from QuizMeta + canonical questions)
+     * and return markdown feedback for the student.
+     */
+    async analyzeLastQuizPerformance(summary) {
+        if (!summary || typeof summary !== 'object') {
+            return 'No data available for your last quiz yet.';
+        }
+
+        const { meta, byChapter, byDifficulty, wrongQuestions } = summary;
+
+        // Basic rule-based fallback if Gemini analysis is disabled.
+        if (!this.enabled) {
+            const total = meta?.total || 0;
+            const score = meta?.score || 0;
+            const percentage = meta?.percentage || (total > 0 ? Math.round((score / total) * 100) : 0);
+
+            const lines = [];
+            lines.push('## Last quiz summary');
+            lines.push('');
+            lines.push(`- **Subject**: ${meta?.subject || 'Unknown'}`);
+            lines.push(`- **Topic**: ${meta?.topic || 'Unknown'}`);
+            if (meta?.date) {
+                lines.push(`- **Date**: ${new Date(meta.date).toLocaleString()}`);
+            }
+            lines.push(`- **Score**: **${score}/${total}** (${percentage}%)`);
+            lines.push('');
+
+            if (Array.isArray(byChapter) && byChapter.length > 0) {
+                lines.push('### Chapter-wise performance');
+                byChapter.forEach((ch) => {
+                    const correct = ch.correct || 0;
+                    const t = ch.total || 0;
+                    const acc = t > 0 ? Math.round((correct / t) * 100) : 0;
+                    lines.push(`- **${ch.chapterId || 'Unknown'}**: ${acc}% (${correct}/${t})`);
+                });
+                lines.push('');
+            }
+
+            if (Array.isArray(wrongQuestions) && wrongQuestions.length > 0) {
+                lines.push('### Recently weak questions');
+                wrongQuestions.slice(0, 5).forEach((q, idx) => {
+                    lines.push(`${idx + 1}. ${q.text || 'Question text unavailable.'}`);
+                });
+                lines.push('');
+            }
+
+            if (percentage >= 85) {
+                lines.push('You did **excellent** on this quiz. Keep challenging yourself with mixed-topic tests.');
+            } else if (percentage >= 60) {
+                lines.push('Good work, but there is **room to improve**. Focus on the chapters where accuracy is below 70%.');
+            } else {
+                lines.push('This quiz shows **significant gaps**. Revisit NCERT theory for the weakest chapters and solve more basics first.');
+            }
+
+            return lines.join('\n');
+        }
+
+        try {
+            const prompt = `You are a NEET performance coach. Given JSON about a student's last quiz, write a concise, structured markdown review.
+
+Rules:
+- Identify 2–4 **weak topics or chapters** and roughly how weak they are.
+- Mention how many questions were wrong and any clear patterns.
+- Suggest 2–3 **specific next actions** (e.g. reread a chapter, solve N questions, attempt a mixed quiz).
+- Keep tone encouraging and practical.
+
+Here is the JSON:
+${JSON.stringify(summary, null, 2)}
+
+Return ONLY markdown text (no JSON). Use headings and bullet points.`;
+
+            const result = await this.model.generateContent(prompt);
+            const response = await result.response;
+            const text = response.text();
+
+            if (!text || !text.trim()) {
+                return 'Analysis is temporarily unavailable. Please try again later.';
+            }
+
+            return text.trim();
+        } catch (error) {
+            console.error('AI last quiz analysis error:', error);
+            return 'Analysis is temporarily unavailable. Please try again later.';
         }
     }
 
@@ -300,5 +387,179 @@ Provide study plan in JSON format with daily tasks for next 7 days.
         };
     }
 }
+
+/**
+ * Last quiz review analysis using Gemini.
+ * Takes a structured summary object (built from QuizMeta + Question docs)
+ * and returns markdown feedback about performance and next steps.
+ */
+AIAnalysisService.prototype.analyzeLastQuizPerformance = async function(summary) {
+    if (!summary || !summary.meta) {
+        return 'No data available for your last quiz yet.';
+    }
+
+    // If Gemini analysis is disabled, fall back to a simple rule-based summary.
+    if (!this.enabled) {
+        return this.buildLastQuizFallbackMarkdown(summary);
+    }
+
+    try {
+        const prompt = this.buildLastQuizPrompt(summary);
+        const result = await this.model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        if (text && String(text).trim().length > 0) {
+            return text;
+        }
+
+        return this.buildLastQuizFallbackMarkdown(summary);
+    } catch (error) {
+        console.error('Last quiz analysis error:', error);
+        return this.buildLastQuizFallbackMarkdown(summary);
+    }
+};
+
+/**
+ * Build Gemini prompt for last quiz performance review.
+ */
+AIAnalysisService.prototype.buildLastQuizPrompt = function(summary) {
+    const meta = summary.meta || {};
+    const byChapter = Array.isArray(summary.byChapter) ? summary.byChapter : [];
+    const byDifficulty = summary.byDifficulty || {};
+    const wrongQuestions = Array.isArray(summary.wrongQuestions) ? summary.wrongQuestions : [];
+
+    const safeJson = JSON.stringify(
+        {
+            meta,
+            byChapter,
+            byDifficulty,
+            wrongQuestions
+        },
+        null,
+        2
+    );
+
+    const dateString = meta.date ? new Date(meta.date).toLocaleString() : 'Unknown';
+
+    return `You are a NEET performance coach.
+Given this JSON about a student's last AI-generated quiz, explain their performance and weak areas, and suggest concrete next steps.
+
+Student's last quiz (metadata):
+- Subject: ${meta.subject || 'Unknown'}
+- Topic: ${meta.topic || 'Unknown'}
+- Chapter ID: ${meta.chapterId || 'Unknown'}
+- Date: ${dateString}
+- Score: ${meta.score ?? 0}/${meta.total ?? 0}
+- Percentage: ${meta.percentage ?? 0}%
+- Time taken (seconds): ${meta.timeTaken ?? 0}
+
+You are also given aggregated performance by chapter and difficulty, plus a list of wrong questions.
+
+CRITICAL INSTRUCTIONS:
+- Focus ONLY on the JSON provided. Do NOT invent numbers that are not implied by the JSON.
+- Identify 2–4 weak topics/chapters with approximate accuracy.
+- Mention how many questions were wrong and any patterns you see (chapters / difficulty).
+- Suggest 2–3 specific next actions (e.g. reread chapter X, practice N questions on topic Y, do a mixed quiz).
+- Write your answer as friendly, encouraging markdown with headings (##) and bullet points.
+- Do NOT return JSON; return well-formatted markdown only.
+
+Here is the summary JSON:
+\`\`\`json
+${safeJson}
+\`\`\`
+`;
+};
+
+/**
+ * Simple rule-based markdown summary when Gemini is not available.
+ */
+AIAnalysisService.prototype.buildLastQuizFallbackMarkdown = function(summary) {
+    const meta = summary?.meta || {};
+    const byChapter = Array.isArray(summary?.byChapter) ? summary.byChapter : [];
+    const byDifficulty = summary?.byDifficulty || {};
+    const wrongQuestions = Array.isArray(summary?.wrongQuestions) ? summary.wrongQuestions : [];
+
+    const total = typeof meta.total === 'number' ? meta.total : 0;
+    const score = typeof meta.score === 'number' ? meta.score : 0;
+    const percentage =
+        typeof meta.percentage === 'number' && !Number.isNaN(meta.percentage)
+            ? meta.percentage
+            : total > 0
+                ? Math.round((score / total) * 100)
+                : 0;
+
+    const dateString = meta.date ? new Date(meta.date).toLocaleString() : 'Unknown';
+    const wrongCount = wrongQuestions.length;
+
+    const weakChapters = byChapter
+        .filter((c) => typeof c.accuracy === 'number' && c.accuracy < 60)
+        .sort((a, b) => a.accuracy - b.accuracy)
+        .slice(0, 4);
+
+    const lines = [];
+
+    lines.push('## Last quiz summary');
+    lines.push('');
+    lines.push(`- **Date**: ${dateString}`);
+    lines.push(`- **Subject**: ${meta.subject || 'Unknown'}`);
+    lines.push(`- **Topic**: ${meta.topic || 'Unknown'}`);
+    lines.push(`- **Score**: **${score}/${total}** (${percentage}%)`);
+    if (typeof meta.timeTaken === 'number') {
+        lines.push(`- **Time taken**: ${Math.round(meta.timeTaken / 60)} min`);
+    }
+
+    lines.push('');
+    lines.push('## Weak areas');
+    if (weakChapters.length === 0) {
+        lines.push('- **No clearly weak chapters detected** based on the available data.');
+    } else {
+        weakChapters.forEach((ch) => {
+            lines.push(
+                `- **Chapter ${ch.chapterId || ''}**: ${ch.accuracy ?? 0}% accuracy (${ch.correct ?? 0}/${
+                    ch.total ?? 0
+                } questions correct)`
+            );
+        });
+    }
+
+    lines.push('');
+    lines.push('## Difficulty breakdown');
+    const diffKeys = ['easy', 'medium', 'hard'];
+    const anyDifficulty = diffKeys.some((k) => byDifficulty && byDifficulty[k]);
+    if (!anyDifficulty) {
+        lines.push('- Difficulty-wise breakdown is not available for this quiz.');
+    } else {
+        diffKeys.forEach((key) => {
+            const bucket = byDifficulty[key];
+            if (!bucket) return;
+            const acc = typeof bucket.accuracy === 'number' ? bucket.accuracy : 0;
+            const totalQ = typeof bucket.total === 'number' ? bucket.total : 0;
+            const correctQ = typeof bucket.correct === 'number' ? bucket.correct : 0;
+            lines.push(`- **${key[0].toUpperCase() + key.slice(1)}**: ${acc}% accuracy (${correctQ}/${totalQ})`);
+        });
+    }
+
+    lines.push('');
+    lines.push('## What to do next');
+    if (wrongCount === 0) {
+        lines.push(
+            '- **Great job!** There are no clearly wrong questions recorded. Keep practicing similar quizzes to maintain your level.'
+        );
+    } else {
+        lines.push(
+            `- Review the **${wrongCount} question${wrongCount === 1 ? '' : 's'} you got wrong**, focusing on why the correct option is right.`
+        );
+        if (weakChapters.length > 0) {
+            const chapterList = weakChapters
+                .map((ch) => (ch.chapterId ? `Chapter ${ch.chapterId}` : 'this chapter'))
+                .join(', ');
+            lines.push(`- Revisit the NCERT theory and examples for: ${chapterList}.`);
+        }
+        lines.push('- Take another short quiz on the same topic within the next 1–2 days to reinforce learning.');
+    }
+
+    return lines.join('\n');
+};
 
 module.exports = new AIAnalysisService();

@@ -32,6 +32,27 @@ exports.getPracticeQuestions = async (req, res, next) => {
     }
 };
 
+// @desc    Get random questions (legacy endpoint for frontend)
+// @route   POST /api/v1/questions/random
+// @access  Private
+exports.getRandomQuestions = async (req, res, next) => {
+    try {
+        const { chapterId, subject, difficulty, examType, limit = 20 } = req.body || {};
+        const questions = await Question.getRandomQuestions(
+            { chapterId, subject, difficulty, examType },
+            parseInt(limit)
+        );
+
+        res.status(200).json({
+            success: true,
+            count: questions.length,
+            data: questions
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 // @desc    Get "Due" questions for Spaced Repetition (Neuronz)
 // @route   GET /api/v1/questions/neuronz/due
 // @access  Private

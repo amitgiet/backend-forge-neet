@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 const GeminiService = require('./geminiService');
 const DailyChallenge = require('../models/DailyChallenge');
-const GeneratedQuiz = require('../models/GeneratedQuiz');
 const User = require('../models/User');
+const QuizFactoryService = require('./quizFactoryService');
 
 class DailyChallengeService {
   static SUBJECTS = ['Physics', 'Chemistry', 'Biology', 'Mathematics'];
@@ -144,99 +144,36 @@ Make it suitable for JEE/NEET level exam preparation.`;
    */
   static async generateQuiz(topic, subject, difficulty) {
     try {
-      const prompt = `Generate 5 multiple-choice questions for the topic "${topic}" in ${subject}.
-      Difficulty: ${difficulty}
-      
-      For each question, provide JSON in this exact format:
-      {
-        "question": "Question text here?",
-        "options": ["Option A", "Option B", "Option C", "Option D"],
-        "correctAnswer": 1,
-        "explanation": "Brief explanation of why this is correct"
-      }
-      
-      Return ONLY a JSON array with 5 objects. NO other text.
-      Ensure:
-      - Questions are clear and unambiguous
-      - Options are plausible distractors
-      - Correct answer index is 0-3
-      - Explanations are educational
-      - Questions test conceptual understanding`;
+      const systemUser = await User.findOne({ email: 'system@neetforge.com' }).lean();
+      const ownerUserId = systemUser?._id || new mongoose.Types.ObjectId();
 
-      const response = await GeminiService.generateText(prompt);
-      
-      // Parse JSON response
-      let questionsData;
-      try {
-        const jsonMatch = response.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          questionsData = JSON.parse(jsonMatch[0]);
-        } else {
-          questionsData = JSON.parse(response);
-        }
-      } catch (parseError) {
-        console.error('[DailyChallengeService] JSON parse error:', parseError);
-        console.log('[DailyChallengeService] Raw response:', response);
-        // Use fallback questions if parsing fails
-        questionsData = this.getFallbackQuestions(topic, subject);
-      }
+      const subjectNorm = String(subject || '').toLowerCase();
+      const difficultyNorm = String(difficulty || 'medium').toLowerCase();
 
-      // Validate questions
-      if (!Array.isArray(questionsData) || questionsData.length < 5) {
-        throw new Error(`Expected 5 questions, got ${questionsData.length}`);
-      }
-
-      // Format questions for GeneratedQuiz
-      const formattedQuestions = questionsData.slice(0, 5).map((q, index) => {
-        if (!q.question || !q.options || q.options.length !== 4 || typeof q.correctAnswer !== 'number') {
-          console.warn(`[DailyChallengeService] Question ${index} invalid, using fallback`);
-          const fallback = this.getFallbackQuestion(topic, subject, index);
-          return {
-            questionNumber: index + 1,
-            question: fallback.question,
-            questionType: 'mcq',
-            options: fallback.options,
-            correctAnswer: fallback.correct,
-            explanation: fallback.explanation,
-            topic: topic,
-            difficulty: difficulty.toLowerCase(),
-            marks: 1
-          };
-        }
-        return {
-          questionNumber: index + 1,
-          question: q.question,
-          questionType: 'mcq',
-          options: q.options,
-          correctAnswer: q.correctAnswer,
-          explanation: q.explanation || 'Review the topic to understand the concept better.',
-          topic: topic,
-          difficulty: difficulty.toLowerCase(),
-          marks: 1
-        };
-      });
-
-      // Create GeneratedQuiz document with dummy userId for daily challenge
-      // In real scenario, we might create it without userId or use an admin user
-      const systemUser = await User.findOne({ email: 'system@neetforge.com' });
-      const userId = systemUser?._id || new mongoose.Types.ObjectId();
-
-      const generatedQuiz = new GeneratedQuiz({
-        userId,
+      const { chapterId, questionIds } = await QuizFactoryService.generateQuestionsWithAI({
+        subject: subjectNorm,
         topic,
-        subject: subject.toLowerCase(),
-        level: 1, // Daily challenge is level 1
-        quizType: 'mcq',
-        questions: formattedQuestions,
-        totalQuestions: formattedQuestions.length,
-        totalMarks: formattedQuestions.length,
-        timeLimit: difficulty === 'Easy' ? 8 : difficulty === 'Medium' ? 10 : 12
+        count: 5,
+        difficulty: ['easy', 'medium', 'hard'].includes(difficultyNorm) ? difficultyNorm : 'medium',
+        examTypes: ['NEET_UG']
       });
 
-      await generatedQuiz.save();
-      console.log(`[DailyChallengeService] GeneratedQuiz created: ${generatedQuiz._id}`);
+      const quiz = await QuizFactoryService.createQuiz({
+        ownerUserId,
+        topic,
+        subject: subjectNorm,
+        chapterId,
+        source: 'daily-challenge',
+        quizType: 'mcq',
+        level: 1,
+        difficulty: difficultyNorm,
+        questionIds,
+        isPublished: true,
+        tags: [String(topic || '').toLowerCase()].filter(Boolean)
+      });
 
-      return generatedQuiz;
+      console.log(`[DailyChallengeService] QuizMeta created: ${quiz._id}`);
+      return quiz;
     } catch (error) {
       console.error('[DailyChallengeService] Error generating quiz:', error);
       throw error;
@@ -409,7 +346,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
     try {
       console.log(`[DailyChallengeService] Submitting challenge for user ${userId}`);
 
-      const challenge = await DailyChallenge.findById(challengeId).populate('quizId');
+      const challenge = await DailyChallenge.findById(challengeId).lean();
       if (!challenge) {
         throw new Error('Challenge not found');
       }
@@ -418,8 +355,23 @@ Make it suitable for JEE/NEET level exam preparation.`;
         throw new Error('Quiz not found for this challenge');
       }
 
-      const quiz = challenge.quizId;
-      const questions = quiz.questions;
+      const quizResult = await QuizFactoryService.getQuizWithQuestions(String(challenge.quizId));
+      const questionDocs = quizResult?.questions || [];
+      if (questionDocs.length === 0) {
+        throw new Error('No questions found for this challenge');
+      }
+
+      const questions = questionDocs.map((q) => {
+        const opts = Array.isArray(q.options) ? q.options : [];
+        const correctKey = q.correctAnswer;
+        const correctAnswer = opts.findIndex((o) => o?.key === correctKey);
+        return {
+          question: q.question?.en || '',
+          options: opts.map((o) => o?.text?.en || ''),
+          correctAnswer: correctAnswer >= 0 ? correctAnswer : 0,
+          explanation: q.explanation?.en || ''
+        };
+      });
 
       // Calculate score
       let correctCount = 0;
@@ -447,15 +399,16 @@ Make it suitable for JEE/NEET level exam preparation.`;
           : Math.round(challenge.xpReward * 0.5);
 
       // Record completion
-      const alreadyCompleted = challenge.completedBy.find(c => c.userId.toString() === userId);
+      const doc = await DailyChallenge.findById(challengeId);
+      const alreadyCompleted = doc.completedBy.find(c => c.userId.toString() === userId.toString());
       if (!alreadyCompleted) {
-        challenge.completedBy.push({
+        doc.completedBy.push({
           userId,
           score,
           xpEarned,
-          answers: answers // Store user's answers
+          answers: answers
         });
-        await challenge.save();
+        await doc.save();
       }
 
       console.log(`[DailyChallengeService] Challenge completed: Score=${score}, XP=${xpEarned}`);
@@ -467,7 +420,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         xpEarned,
         detailedAnswers,
         challenge: {
-          id: challenge._id,
+          id: doc._id,
           topic: challenge.topic,
           subject: challenge.subject
         }
@@ -484,34 +437,43 @@ Make it suitable for JEE/NEET level exam preparation.`;
   static async createFallbackQuiz(topic, subject, difficulty) {
     try {
       const systemUser = await User.findOne({ email: 'system@neetforge.com' });
-      const userId = systemUser?._id || new mongoose.Types.ObjectId();
+      const ownerUserId = systemUser?._id || new mongoose.Types.ObjectId();
 
       const fallbackQuestions = this.getFallbackQuestions(topic, subject);
+      const plain = fallbackQuestions.map((q) => ({
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correct,
+        explanation: q.explanation
+      }));
 
-      const generatedQuiz = new GeneratedQuiz({
-        userId,
+      const subjectNorm = String(subject || '').toLowerCase();
+      const difficultyNorm = String(difficulty || 'medium').toLowerCase();
+
+      const { chapterId, questionIds } = await QuizFactoryService.createQuestionsFromPlain({
+        subject: subjectNorm,
         topic,
-        subject: subject.toLowerCase(),
-        level: 1,
-        quizType: 'mcq',
-        questions: fallbackQuestions.map((q, i) => ({
-          questionNumber: i + 1,
-          question: q.question,
-          questionType: 'mcq',
-          options: q.options,
-          correctAnswer: q.correct,
-          explanation: q.explanation,
-          topic: topic,
-          difficulty: difficulty.toLowerCase(),
-          marks: 1
-        })),
-        totalQuestions: fallbackQuestions.length,
-        totalMarks: fallbackQuestions.length
+        items: plain,
+        difficulty: ['easy', 'medium', 'hard'].includes(difficultyNorm) ? difficultyNorm : 'medium',
+        examTypes: ['NEET_UG']
       });
 
-      await generatedQuiz.save();
-      console.log('[DailyChallengeService] Fallback quiz created:', generatedQuiz._id);
-      return generatedQuiz;
+      const quiz = await QuizFactoryService.createQuiz({
+        ownerUserId,
+        topic,
+        subject: subjectNorm,
+        chapterId,
+        source: 'daily-challenge',
+        quizType: 'mcq',
+        level: 1,
+        difficulty: difficultyNorm,
+        questionIds,
+        isPublished: true,
+        tags: ['fallback', String(topic || '').toLowerCase()].filter(Boolean)
+      });
+
+      console.log('[DailyChallengeService] Fallback QuizMeta created:', quiz._id);
+      return quiz;
     } catch (error) {
       console.error('[DailyChallengeService] Error creating fallback quiz:', error);
       throw error;
@@ -538,26 +500,32 @@ Make it suitable for JEE/NEET level exam preparation.`;
       const systemUser = await User.findOne({ email: 'system@neetforge.com' });
       const userId = systemUser?._id || new mongoose.Types.ObjectId();
 
-      const quiz = new GeneratedQuiz({
-        userId,
-        topic: 'General Science - Emergency Challenge',
+      const { chapterId, questionIds } = await QuizFactoryService.createQuestionsFromPlain({
         subject: 'physics',
-        level: 1,
-        quizType: 'mcq',
-        questions: fallbackQuestions.map((q, i) => ({
-          questionNumber: i + 1,
+        topic: 'General Science',
+        items: fallbackQuestions.map((q) => ({
           question: q.question,
-          questionType: 'mcq',
           options: q.options,
           correctAnswer: q.correct,
-          explanation: q.explanation,
-          topic: 'General Science',
-          difficulty: 'medium',
-          marks: 1
-        }))
+          explanation: q.explanation
+        })),
+        difficulty: 'medium',
+        examTypes: ['NEET_UG']
       });
 
-      await quiz.save();
+      const quiz = await QuizFactoryService.createQuiz({
+        ownerUserId: userId,
+        topic: 'General Science - Emergency Challenge',
+        subject: 'physics',
+        chapterId,
+        source: 'daily-challenge',
+        quizType: 'mcq',
+        level: 1,
+        difficulty: 'medium',
+        questionIds,
+        isPublished: true,
+        tags: ['emergency']
+      });
 
       challenge = new DailyChallenge({
         date: today,

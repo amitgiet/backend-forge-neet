@@ -1,6 +1,7 @@
 const DailyChallengeService = require('../services/dailyChallengeService');
 const Leaderboard = require('../models/Leaderboard');
 const DailyChallenge = require('../models/DailyChallenge');
+const QuizFactoryService = require('../services/quizFactoryService');
 
 class DailyChallengeController {
   /**
@@ -13,11 +14,26 @@ class DailyChallengeController {
 
       const challenge = await DailyChallengeService.generateTodaysChallenge();
       
-      // Populate the quiz
-      const populatedChallenge = await DailyChallenge.findById(challenge._id).populate('quizId');
+      const populatedChallenge = await DailyChallenge.findById(challenge._id).lean();
+      const quizResult = populatedChallenge?.quizId
+        ? await QuizFactoryService.getQuizWithQuestions(String(populatedChallenge.quizId))
+        : null;
+
+      const questions = (quizResult?.questions || []).map((q) => {
+        const opts = Array.isArray(q.options) ? q.options : [];
+        const optionTexts = opts.map((o) => o?.text?.en || '');
+        const correctKey = q.correctAnswer;
+        const correctAnswer = opts.findIndex((o) => o?.key === correctKey);
+        return {
+          question: q.question?.en || '',
+          options: optionTexts,
+          correctAnswer: correctAnswer >= 0 ? correctAnswer : 0,
+          explanation: q.explanation?.en || ''
+        };
+      });
 
       // Check if user already completed this challenge
-      const userCompletion = populatedChallenge.completedBy.find(
+      const userCompletion = (populatedChallenge.completedBy || []).find(
         c => c.userId.toString() === userId.toString()
       );
 
@@ -33,8 +49,8 @@ class DailyChallengeController {
           xpReward: populatedChallenge.xpReward,
           timeLimit: populatedChallenge.timeLimit,
           content: populatedChallenge.content || '',
-          questions: populatedChallenge.quizId?.questions || [],
-          totalQuestions: populatedChallenge.quizId?.questions?.length || 0,
+          questions,
+          totalQuestions: questions.length,
           // If user already completed, include their submission
           completed: !!userCompletion,
           userScore: userCompletion?.score || null,

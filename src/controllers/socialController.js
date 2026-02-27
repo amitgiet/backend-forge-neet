@@ -3,19 +3,24 @@ const Chat = require('../models/Chat');
 const Message = require('../models/Message');
 const User = require('../models/User');
 
-// Search users by email or phone
+// Search users by email, phone, or name
 exports.searchUsers = async (req, res) => {
     try {
         const { query } = req.query;
         const userId = req.user._id;
         
+        if (!query || query.trim().length === 0) {
+            return res.json({ success: true, data: [] });
+        }
+        
         const users = await User.find({
             _id: { $ne: userId },
             $or: [
                 { email: { $regex: query, $options: 'i' } },
-                { phone: { $regex: query, $options: 'i' } }
+                { phone: { $regex: query, $options: 'i' } },
+                { name: { $regex: query, $options: 'i' } }
             ]
-        }).select('name email phone').limit(20);
+        }).select('_id name email phone avatar').limit(20);
         
         res.json({ success: true, data: users });
     } catch (error) {
@@ -28,6 +33,11 @@ exports.sendFriendRequest = async (req, res) => {
     try {
         const userId = req.user._id;
         const { friendId } = req.body;
+        
+        // Prevent self-friending
+        if (userId.toString() === friendId) {
+            return res.status(400).json({ success: false, message: 'Cannot add yourself as friend' });
+        }
         
         const existing = await Friend.findOne({
             $or: [
@@ -45,7 +55,16 @@ exports.sendFriendRequest = async (req, res) => {
             friendId,
             requestedBy: userId,
             status: 'pending'
-        });
+        }).then(f => f.populate('userId friendId', 'name email avatar'));
+        
+        // Emit socket event for real-time updates
+        const io = req.app.get('io');
+        if (io) {
+            io.to(friendId.toString()).emit('friend_request_received', {
+                fromUser: friend.userId,
+                message: `${friend.userId.name} sent you a friend request`
+            });
+        }
         
         res.status(201).json({ success: true, data: friend });
     } catch (error) {
@@ -63,10 +82,19 @@ exports.acceptFriendRequest = async (req, res) => {
             { userId: friendId, friendId: userId, status: 'pending' },
             { status: 'accepted', acceptedAt: new Date() },
             { new: true }
-        );
+        ).populate('userId friendId', 'name email avatar');
         
         if (!friend) {
             return res.status(404).json({ success: false, message: 'Friend request not found' });
+        }
+        
+        // Emit socket event for real-time updates
+        const io = req.app.get('io');
+        if (io) {
+            io.to(friendId.toString()).emit('friend_request_accepted', {
+                user: friend.friendId,
+                message: `${friend.friendId.name} accepted your friend request`
+            });
         }
         
         res.json({ success: true, data: friend });
@@ -120,13 +148,15 @@ exports.createDirectChat = async (req, res) => {
         let chat = await Chat.findOne({
             type: 'direct',
             participants: { $all: [userId, friendId] }
-        });
+        }).populate('participants', 'name email avatar _id')
+         .populate('lastMessage.sender', 'name email _id');
         
         if (!chat) {
             chat = await Chat.create({
                 type: 'direct',
                 participants: [userId, friendId]
             });
+            chat = await chat.populate('participants', 'name email avatar _id');
         }
         
         res.json({ success: true, data: chat });
@@ -162,7 +192,9 @@ exports.getChats = async (req, res) => {
         const chats = await Chat.find({
             participants: userId,
             isActive: true
-        }).populate('participants', 'name email').sort({ 'lastMessage.timestamp': -1 });
+        }).populate('participants', 'name email avatar _id')
+         .populate('lastMessage.sender', 'name email _id')
+         .sort({ updatedAt: -1 });
         
         res.json({ success: true, data: chats });
     } catch (error) {
@@ -181,14 +213,15 @@ exports.sendMessage = async (req, res) => {
             sender: userId,
             text,
             readBy: [{ userId, readAt: new Date() }]
-        });
+        }).then(m => m.populate('sender', 'name email avatar _id'));
         
         await Chat.findByIdAndUpdate(chatId, {
             lastMessage: {
                 text,
                 sender: userId,
                 timestamp: new Date()
-            }
+            },
+            updatedAt: new Date()
         });
         
         res.status(201).json({ success: true, data: message });
@@ -204,7 +237,7 @@ exports.getMessages = async (req, res) => {
         const { limit = 50, skip = 0 } = req.query;
         
         const messages = await Message.find({ chatId, isDeleted: false })
-            .populate('sender', 'name email')
+            .populate('sender', 'name email avatar _id')
             .sort({ createdAt: -1 })
             .limit(parseInt(limit))
             .skip(parseInt(skip));
@@ -231,16 +264,17 @@ exports.getFriendsLeaderboard = async (req, res) => {
         friendIds.push(userId);
         
         const users = await User.find({ _id: { $in: friendIds } })
-            .select('name email stats')
-            .sort({ 'stats.totalXP': -1 });
+            .select('name email avatar gamification _id')
+            .sort({ 'gamification.totalXP': -1 });
         
         const leaderboard = users.map((user, index) => ({
             rank: index + 1,
             userId: user._id,
             name: user.name,
             email: user.email,
-            xp: user.stats?.totalXP || 0,
-            streak: user.stats?.currentStreak || 0,
+            avatar: user.avatar,
+            xp: user.gamification?.totalXP || 0,
+            streak: user.gamification?.currentStreak || 0,
             isCurrentUser: user._id.toString() === userId.toString()
         }));
         

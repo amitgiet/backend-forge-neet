@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const StudySession = require('../models/StudySession');
 const TestAttempt = require('../models/TestAttempt');
-const GeneratedQuiz = require('../models/GeneratedQuiz');
+const QuizMeta = require('../models/QuizMeta');
 const Challenge = require('../models/Challenge');
 const ErrorResponse = require('../utils/errorResponse');
 const bcrypt = require('bcryptjs');
@@ -449,8 +449,8 @@ exports.getTodayProgress = async (req, res, next) => {
                     }
                 }
             ]),
-            GeneratedQuiz.aggregate([
-                { $match: { userId } },
+            QuizMeta.aggregate([
+                { $match: { ownerUserId: userId } },
                 { $unwind: '$attempts' },
                 {
                     $match: {
@@ -461,7 +461,7 @@ exports.getTodayProgress = async (req, res, next) => {
                 {
                     $group: {
                         _id: null,
-                        questionsAttempted: { $sum: { $ifNull: ['$totalQuestions', 0] } },
+                        questionsAttempted: { $sum: { $ifNull: ['$attempts.totalQuestions', 0] } },
                         correctAnswers: { $sum: { $ifNull: ['$attempts.score', 0] } },
                         studyTimeSeconds: { $sum: { $ifNull: ['$attempts.timeTaken', 0] } }
                     }

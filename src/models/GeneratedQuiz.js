@@ -20,6 +20,11 @@ const GeneratedQuizSchema = new mongoose.Schema({
     default: 'general'
   },
 
+  chapter: {
+    type: Number,
+    min: 0
+  },
+
   level: {
     type: Number,
     min: 1,
@@ -86,7 +91,7 @@ const GeneratedQuizSchema = new mongoose.Schema({
 
   aiModel: {
     type: String,
-    default: 'gemini-pro'
+    default: 'gemini-2.5-flash-lite'
   },
 
   // Attempt tracking
@@ -130,5 +135,6 @@ const GeneratedQuizSchema = new mongoose.Schema({
 // Index for quick queries
 GeneratedQuizSchema.index({ userId: 1, createdAt: -1 });
 GeneratedQuizSchema.index({ topic: 1, level: 1 });
+GeneratedQuizSchema.index({ subject: 1, chapter: 1, topic: 1, createdAt: -1 });
 
 module.exports = mongoose.model('GeneratedQuiz', GeneratedQuizSchema);

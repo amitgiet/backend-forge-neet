@@ -213,6 +213,14 @@ class GeminiService {
             }
         }
     }
+
+    /**
+     * Convenience helper used across services (e.g. daily challenge).
+     */
+    static async generateText(prompt, { maxRetries = 3 } = {}) {
+        const service = new GeminiService();
+        return await service.generateWithRetry(prompt, maxRetries);
+    }
 }
 
 module.exports = GeminiService;

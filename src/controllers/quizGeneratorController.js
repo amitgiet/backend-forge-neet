@@ -199,13 +199,8 @@ exports.getQuizStats = async (req, res, next) => {
       topic: quiz.topic,
       totalAttempts: quiz.totalAttempts,
       avgScore: quiz.avgScore,
-      totalMarks: quiz.totalMarks,
-      attempts: quiz.attempts.map(a => ({
-        attemptDate: a.attemptDate,
-        score: a.score,
-        percentage: a.percentage,
-        timeTaken: a.timeTaken
-      }))
+      totalMarks: quiz.totalQuestions,
+      attempts: []
     };
 
     res.status(200).json({
