@@ -48,7 +48,7 @@ exports.getDueLines = async (req, res, next) => {
 exports.processLineSession = async (req, res, next) => {
     try {
         const userId = req.user.id;
-        const { lineId, correctAnswers, totalQuizzes = 4, timeSpent } = req.body;
+        const { lineId, correctAnswers, totalQuizzes = 4, timeSpent, review } = req.body;
 
         if (!lineId || typeof correctAnswers !== 'number') {
             return next(new ErrorResponse('Line ID and correct answers count required', 400));
@@ -68,7 +68,7 @@ exports.processLineSession = async (req, res, next) => {
             });
         }
 
-        const result = await NeuronzService.processLineSession(userId, lineId, correctAnswers, totalQuizzes, timeSpent);
+        const result = await NeuronzService.processLineSession(userId, lineId, correctAnswers, totalQuizzes, timeSpent, review);
 
         res.status(200).json({
             success: true,
@@ -257,7 +257,7 @@ exports.trackBySubjectAndTopic = async (req, res, next) => {
         });
 
     } catch (error) {
-        next(new ErrorResponse(error.message, 500));
+        next(new ErrorResponse(error.message, error.statusCode || 500));
     }
 };
 
@@ -330,6 +330,101 @@ exports.getLineAnalytics = async (req, res, next) => {
             data: analytics
         });
 
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Get topic-level NeuronZ summary
+// @route   GET /api/neuronz/topics/summary
+// @access  Private
+exports.getTopicSummary = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const data = await NeuronzService.getTopicSummary(userId);
+
+        res.status(200).json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Get due lines for a topic
+// @route   GET /api/neuronz/topics/:topicId/due
+// @access  Private
+exports.getTopicDueLines = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { topicId } = req.params;
+        const { sessionSize = 6 } = req.query;
+
+        const data = await NeuronzService.getTopicDueLines(userId, topicId, sessionSize);
+        res.status(200).json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Start baseline session for a topic
+// @route   POST /api/neuronz/topics/:topicId/baseline
+// @access  Private
+exports.startTopicBaseline = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { topicId } = req.params;
+        const { baselineSize = 20 } = req.body || {};
+
+        const data = await NeuronzService.startTopicBaseline(userId, topicId, baselineSize);
+        res.status(200).json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Check mapped availability for a subject/topic
+// @route   GET /api/neuronz/topics/availability
+// @access  Private
+exports.getTopicAvailability = async (req, res, next) => {
+    try {
+        const { subject, topic } = req.query;
+
+        if (!subject || !topic) {
+            return next(new ErrorResponse('Subject and topic are required', 400));
+        }
+
+        const data = await NeuronzService.getTopicAvailability(subject, topic);
+        res.status(200).json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Get past submissions for a topic
+// @route   GET /api/neuronz/topics/:topicId/history
+// @access  Private
+exports.getTopicSubmissionHistory = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const { topicId } = req.params;
+        const { limit = 20 } = req.query;
+
+        const data = await NeuronzService.getTopicSubmissionHistory(userId, topicId, limit);
+        res.status(200).json({
+            success: true,
+            data
+        });
     } catch (error) {
         next(new ErrorResponse(error.message, 500));
     }

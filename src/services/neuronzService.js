@@ -1,5 +1,6 @@
 const UserLine = require('../models/UserLine');
 const NCERTLine = require('../models/NCERTLine');
+const SessionAttempt = require('../models/SessionAttempt');
 const User = require('../models/User');
 const GeminiService = require('./geminiService');
 const mongoose = require('mongoose');
@@ -13,6 +14,95 @@ class NeuronzService {
         free: 50,
         pro: Infinity
     };
+
+    static MOCK_LINE_MARKER = 'This is a mock NCERT line for demonstration purposes.';
+
+    static slugify(value = '') {
+        return String(value)
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/(^-|-$)/g, '');
+    }
+
+    static getTopicLabelFromLine(line = {}) {
+        if (Array.isArray(line.conceptTags) && line.conceptTags.length > 0 && line.conceptTags[0]) {
+            return String(line.conceptTags[0]).trim();
+        }
+        if (line.chapter) return `Chapter ${line.chapter}`;
+        return 'General';
+    }
+
+    static getTopicDescriptor(line = {}) {
+        const subject = String(line.subject || 'general').toLowerCase();
+        const topic = this.getTopicLabelFromLine(line);
+        const topicId = `${subject}__${this.slugify(topic || 'general')}`;
+        return { topicId, topic, subject };
+    }
+
+    static extractLineIdentifier(value) {
+        if (!value) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'object') {
+            if (value._id) return String(value._id);
+            if (value.lineId) return String(value.lineId);
+        }
+        return String(value);
+    }
+
+    static async enrichUserLinesWithNCERT(userLines = []) {
+        const lineIdentifiers = userLines
+            .map((ul) => this.extractLineIdentifier(ul?.lineId))
+            .filter(Boolean);
+        const objectIdKeys = lineIdentifiers.filter(id => mongoose.Types.ObjectId.isValid(id));
+        const businessKeys = lineIdentifiers.filter(id => !mongoose.Types.ObjectId.isValid(id));
+
+        const [byObjectIds, byBusinessIds] = await Promise.all([
+            objectIdKeys.length > 0
+                ? NCERTLine.find({ _id: { $in: objectIdKeys } }).select('lineId ncertText subject chapter class book conceptTags')
+                : [],
+            businessKeys.length > 0
+                ? NCERTLine.find({ lineId: { $in: businessKeys } }).select('lineId ncertText subject chapter class book conceptTags')
+                : []
+        ]);
+
+        const lineMap = new Map();
+        [...byObjectIds, ...byBusinessIds].forEach(line => {
+            lineMap.set(String(line._id), line.toObject());
+            lineMap.set(String(line.lineId), line.toObject());
+        });
+
+        const enriched = userLines
+            .map(ul => {
+                const item = ul.toObject ? ul.toObject() : ul;
+                const key = this.extractLineIdentifier(item.lineId);
+                const matchedLine = lineMap.get(String(key));
+                if (!matchedLine) return null;
+                if (String(matchedLine.ncertText || '').includes(this.MOCK_LINE_MARKER)) return null;
+                item.lineId = matchedLine;
+                return item;
+            })
+            .filter(Boolean);
+
+        // Deduplicate same NCERT line represented by legacy/new lineId format.
+        const uniqueLineMap = new Map();
+        for (const item of enriched) {
+            const key = item.lineId && item.lineId._id ? String(item.lineId._id) : String(item.lineId);
+            const existing = uniqueLineMap.get(key);
+            if (!existing) {
+                uniqueLineMap.set(key, item);
+                continue;
+            }
+            const existingReviewed = new Date(existing.lastReviewed || 0).getTime();
+            const currentReviewed = new Date(item.lastReviewed || 0).getTime();
+            const shouldReplace =
+                (item.level || 0) > (existing.level || 0) ||
+                ((item.level || 0) === (existing.level || 0) && currentReviewed > existingReviewed);
+            if (shouldReplace) uniqueLineMap.set(key, item);
+        }
+
+        return Array.from(uniqueLineMap.values());
+    }
 
     /**
      * Resolve NCERT line by either Mongo _id or business lineId.
@@ -66,62 +156,8 @@ class NeuronzService {
             console.log(`[getDueLines] Fetching due lines for userId: ${userId}`);
 
             const dueLines = await UserLine.getDueLines(userId, limit);
-            const lineIdentifiers = dueLines.map(ul => String(ul.lineId));
-
-            const objectIdKeys = lineIdentifiers.filter(id => mongoose.Types.ObjectId.isValid(id));
-            const businessKeys = lineIdentifiers.filter(id => !mongoose.Types.ObjectId.isValid(id));
-
-            const [byObjectIds, byBusinessIds] = await Promise.all([
-                objectIdKeys.length > 0
-                    ? NCERTLine.find({ _id: { $in: objectIdKeys } }).select('lineId ncertText subject chapter class book')
-                    : [],
-                businessKeys.length > 0
-                    ? NCERTLine.find({ lineId: { $in: businessKeys } }).select('lineId ncertText subject chapter class book')
-                    : []
-            ]);
-
-            const lineMap = new Map();
-            [...byObjectIds, ...byBusinessIds].forEach(line => {
-                lineMap.set(String(line._id), line.toObject());
-                lineMap.set(String(line.lineId), line.toObject());
-            });
-
-            const enrichedLines = dueLines.map(ul => {
-                const item = ul.toObject();
-                const matchedLine = lineMap.get(String(item.lineId));
-                if (matchedLine) {
-                    item.lineId = matchedLine;
-                }
-                return item;
-            });
-
-            // Deduplicate same NCERT content represented by legacy/new lineId formats.
-            const uniqueLineMap = new Map();
-            for (const item of enrichedLines) {
-                const canonicalKey =
-                    item.lineId && typeof item.lineId === 'object' && item.lineId._id
-                        ? String(item.lineId._id)
-                        : String(item.lineId);
-
-                const existing = uniqueLineMap.get(canonicalKey);
-                if (!existing) {
-                    uniqueLineMap.set(canonicalKey, item);
-                    continue;
-                }
-
-                // Prefer higher level; tie-breaker by most recently reviewed.
-                const existingReviewed = new Date(existing.lastReviewed || 0).getTime();
-                const currentReviewed = new Date(item.lastReviewed || 0).getTime();
-                const shouldReplace =
-                    (item.level || 0) > (existing.level || 0) ||
-                    ((item.level || 0) === (existing.level || 0) && currentReviewed > existingReviewed);
-
-                if (shouldReplace) {
-                    uniqueLineMap.set(canonicalKey, item);
-                }
-            }
-
-            const uniqueLines = Array.from(uniqueLineMap.values()).sort((a, b) => {
+            const enrichedLines = await this.enrichUserLinesWithNCERT(dueLines);
+            const uniqueLines = enrichedLines.sort((a, b) => {
                 if ((a.level || 0) !== (b.level || 0)) return (a.level || 0) - (b.level || 0);
                 return new Date(b.lastReviewed || 0).getTime() - new Date(a.lastReviewed || 0).getTime();
             });
@@ -157,7 +193,7 @@ class NeuronzService {
     /**
      * Process quiz session results for a line
      */
-    static async processLineSession(userId, lineId, correctAnswers, totalQuizzes = 4, timeSpent = 0) {
+    static async processLineSession(userId, lineId, correctAnswers, totalQuizzes = 4, timeSpent = 0, review = null) {
         try {
             const ncertLine = await this.resolveNCERTLine(lineId);
             const canonicalLineId = ncertLine ? String(ncertLine._id) : String(lineId);
@@ -171,8 +207,30 @@ class NeuronzService {
                 userLine = new UserLine({ userId, lineId: canonicalLineId });
             }
 
+            const levelBefore = userLine.level;
             userLine.updateLevel(correctAnswers, totalQuizzes, timeSpent);
             userLine.lineId = canonicalLineId;
+            
+            // Create SessionAttempt record
+            const sessionAttempt = new SessionAttempt({
+                userId,
+                lineId: canonicalLineId,
+                type: 'revision',
+                sessionDate: new Date(),
+                quizzesAttempted: totalQuizzes,
+                correctAnswers,
+                accuracy: Math.round((correctAnswers / totalQuizzes) * 100),
+                timeSpent,
+                levelBefore,
+                levelAfter: userLine.level,
+                isMastered: userLine.isMastered,
+                nextRevision: userLine.nextRevision,
+                review: review || []
+            });
+            
+            const savedSession = await sessionAttempt.save();
+            userLine.sessionAttemptIds.push(savedSession._id);
+            
             await userLine.save();
 
             // Remove legacy duplicates for the same NCERT line representation.
@@ -210,8 +268,9 @@ class NeuronzService {
      * Generate 4 micro-quizzes for an NCERT line using AI
      */
     static async generateMicroQuizzes(lineId) {
+        let ncertLine = null;
         try {
-            const ncertLine = await this.resolveNCERTLine(lineId);
+            ncertLine = await this.resolveNCERTLine(lineId);
             if (!ncertLine) {
                 throw new Error('NCERT line not found');
             }
@@ -253,38 +312,196 @@ class NeuronzService {
             console.error('Error in generateMicroQuizzes:', error);
 
             // Fallback to mock quizzes if AI fails
-            return this.getMockQuizzes(lineId);
+            return this.getMockQuizzes(ncertLine);
+        }
+    }
+
+    static async getTopicSummary(userId) {
+        try {
+            const userLines = await UserLine.find({ userId, level: { $gte: 1, $lte: 7 } }).sort({ lastReviewed: -1 });
+            const enrichedLines = await this.enrichUserLinesWithNCERT(userLines);
+            const now = Date.now();
+            const grouped = new Map();
+
+            for (const line of enrichedLines) {
+                const descriptor = this.getTopicDescriptor(line.lineId);
+                const key = descriptor.topicId;
+                const existing = grouped.get(key) || {
+                    topicId: descriptor.topicId,
+                    topic: descriptor.topic,
+                    subject: descriptor.subject,
+                    totalTracked: 0,
+                    dueNow: 0,
+                    masteredCount: 0,
+                    byLevel: { L1: 0, L2: 0, L3: 0, L4: 0, L5: 0, L6: 0, L7: 0 },
+                    lastActivityAt: null
+                };
+
+                existing.totalTracked += 1;
+                if (new Date(line.nextRevision).getTime() <= now) existing.dueNow += 1;
+                if ((line.level || 0) === 7 || line.isMastered) existing.masteredCount += 1;
+                const levelKey = `L${line.level || 1}`;
+                if (existing.byLevel[levelKey] !== undefined) existing.byLevel[levelKey] += 1;
+
+                const reviewedAt = line.lastReviewed ? new Date(line.lastReviewed).getTime() : 0;
+                const prev = existing.lastActivityAt ? new Date(existing.lastActivityAt).getTime() : 0;
+                if (reviewedAt > prev) existing.lastActivityAt = line.lastReviewed;
+
+                grouped.set(key, existing);
+            }
+
+            const summary = Array.from(grouped.values())
+                .map(item => ({
+                    ...item,
+                    masteryPercent: item.totalTracked > 0
+                        ? Math.round((item.masteredCount / item.totalTracked) * 100)
+                        : 0
+                }))
+                .sort((a, b) => b.dueNow - a.dueNow || a.topic.localeCompare(b.topic));
+
+            return {
+                totalTopics: summary.length,
+                totalDueNow: summary.reduce((sum, s) => sum + s.dueNow, 0),
+                topics: summary
+            };
+        } catch (error) {
+            throw new Error(`Failed to get topic summary: ${error.message}`);
+        }
+    }
+
+    static async getTopicDueLines(userId, topicId, sessionSize = 6) {
+        try {
+            const size = Math.max(4, Math.min(10, Number(sessionSize) || 6));
+            const dueLines = await UserLine.getDueLines(userId, 500);
+            const enrichedLines = await this.enrichUserLinesWithNCERT(dueLines);
+            const linesForTopic = enrichedLines
+                .filter(line => this.getTopicDescriptor(line.lineId).topicId === String(topicId))
+                .sort((a, b) => (a.level || 0) - (b.level || 0) || new Date(a.nextRevision).getTime() - new Date(b.nextRevision).getTime());
+
+            const sample = linesForTopic.slice(0, size);
+            const byLevel = { L1: 0, L2: 0, L3: 0, L4: 0, L5: 0, L6: 0, L7: 0 };
+            linesForTopic.forEach(line => {
+                const levelKey = `L${line.level || 1}`;
+                if (byLevel[levelKey] !== undefined) byLevel[levelKey] += 1;
+            });
+
+            const first = linesForTopic[0];
+            const descriptor = first ? this.getTopicDescriptor(first.lineId) : { topicId, topic: 'Unknown', subject: 'general' };
+
+            return {
+                topicId: descriptor.topicId,
+                topic: descriptor.topic,
+                subject: descriptor.subject,
+                dueNow: linesForTopic.length,
+                byLevel,
+                sessionSize: size,
+                lines: sample
+            };
+        } catch (error) {
+            throw new Error(`Failed to get topic due lines: ${error.message}`);
+        }
+    }
+
+    static async startTopicBaseline(userId, topicId, baselineSize = 20) {
+        try {
+            const size = Math.max(10, Math.min(30, Number(baselineSize) || 20));
+            const userLines = await UserLine.find({ userId, level: { $gte: 1, $lte: 7 } });
+            const enrichedLines = await this.enrichUserLinesWithNCERT(userLines);
+            const topicLines = enrichedLines
+                .filter(line => this.getTopicDescriptor(line.lineId).topicId === String(topicId))
+                .sort((a, b) => new Date(a.lastReviewed || 0).getTime() - new Date(b.lastReviewed || 0).getTime());
+
+            const selected = topicLines.slice(0, size);
+            return {
+                topicId,
+                baselineSize: size,
+                available: topicLines.length,
+                selectedCount: selected.length,
+                lines: selected
+            };
+        } catch (error) {
+            throw new Error(`Failed to start topic baseline: ${error.message}`);
+        }
+    }
+
+    static async getTopicSubmissionHistory(userId, topicId, limit = 20) {
+        try {
+            const maxItems = Math.max(1, Math.min(100, Number(limit) || 20));
+            const userLines = await UserLine.find({ userId, level: { $gte: 1, $lte: 7 } });
+            const enrichedLines = await this.enrichUserLinesWithNCERT(userLines);
+            const topicLines = enrichedLines.filter(
+                (line) => this.getTopicDescriptor(line.lineId).topicId === String(topicId)
+            );
+
+            // Get all SessionAttempts for these lines
+            const lineIds = topicLines.map(l => String(l.lineId._id));
+            const attempts = await SessionAttempt.find({
+                userId: new mongoose.Types.ObjectId(userId),
+                lineId: { $in: lineIds },
+                type: 'revision'
+            })
+            .sort({ sessionDate: -1 })
+            .limit(maxItems);
+
+            const entries = attempts.map(attempt => {
+                const line = topicLines.find(l => String(l.lineId._id) === String(attempt.lineId));
+                return {
+                    lineId: String(attempt.lineId),
+                    lineText: String(line?.lineId?.ncertText || 'NCERT line'),
+                    subject: String(line?.lineId?.subject || 'general'),
+                    chapter: line?.lineId?.chapter || null,
+                    sessionDate: attempt.sessionDate,
+                    quizzesAttempted: attempt.quizzesAttempted || 0,
+                    correctAnswers: attempt.correctAnswers || 0,
+                    accuracy: attempt.accuracy || 0,
+                    levelAfter: attempt.levelAfter || 1,
+                    timeSpent: attempt.timeSpent || 0,
+                    isAdjustment: Boolean(attempt.isAdjustment),
+                    review: attempt.review || []
+                };
+            });
+
+            return {
+                topicId: String(topicId),
+                totalAttempts: entries.length,
+                entries
+            };
+        } catch (error) {
+            throw new Error(`Failed to get topic submission history: ${error.message}`);
         }
     }
 
     /**
      * Fallback mock quizzes if AI service fails
      */
-    static getMockQuizzes(lineId) {
+    static getMockQuizzes(ncertLine) {
+        const text = String(ncertLine?.ncertText || 'this NCERT line');
+        const subject = String(ncertLine?.subject || 'the subject');
+
         return [
             {
-                question: `What is the main concept discussed in this NCERT line?`,
-                options: ['Option A', 'Option B', 'Option C', 'Option D'],
-                correctAnswer: 1,
-                explanation: 'This is based on the NCERT line content.'
-            },
-            {
-                question: `Which statement best describes the given concept?`,
-                options: ['Statement 1', 'Statement 2', 'Statement 3', 'Statement 4'],
-                correctAnswer: 2,
-                explanation: 'This tests understanding of the concept.'
-            },
-            {
-                question: `The key term in this line refers to:`,
-                options: ['Term A', 'Term B', 'Term C', 'Term D'],
+                question: `Which statement best matches this line from ${subject}? "${text}"`,
+                options: ['Core definition from the line', 'Unrelated formula', 'Opposite interpretation', 'Historical trivia'],
                 correctAnswer: 0,
-                explanation: 'This focuses on terminology.'
+                explanation: 'The best answer is the core definition/concept directly present in the line.'
             },
             {
-                question: `What can be inferred from this concept?`,
-                options: ['Inference 1', 'Inference 2', 'Inference 3', 'Inference 4'],
-                correctAnswer: 3,
-                explanation: 'This tests deeper understanding.'
+                question: `What is the most likely application of this concept?`,
+                options: ['Direct NCERT-context application', 'No relation to topic', 'Only lab safety note', 'Only exam strategy'],
+                correctAnswer: 0,
+                explanation: 'The direct NCERT-context application reflects conceptual understanding.'
+            },
+            {
+                question: `If one key term in the line changes, what changes first?`,
+                options: ['Meaning of the concept', 'Chapter title only', 'Subject stream only', 'Nothing changes'],
+                correctAnswer: 0,
+                explanation: 'Key terminology drives the meaning and interpretation of the concept.'
+            },
+            {
+                question: `What is the safest inference from this line?`,
+                options: ['Inference consistent with the NCERT statement', 'Inference that contradicts the line', 'Inference from another chapter', 'No inference possible'],
+                correctAnswer: 0,
+                explanation: 'A valid inference must stay consistent with the given NCERT statement.'
             }
         ];
     }
@@ -561,6 +778,7 @@ class NeuronzService {
             let ncertLines = await NCERTLine.find({
                 subject: { $regex: subject, $options: 'i' },
                 isActive: true,
+                ncertText: { $not: { $regex: this.MOCK_LINE_MARKER, $options: 'i' } },
                 $or: [
                     { ncertText: { $regex: topic, $options: 'i' } },
                     { conceptTags: { $regex: topic, $options: 'i' } }
@@ -569,52 +787,12 @@ class NeuronzService {
 
             console.log(`[trackBySubjectAndTopic] Found ${ncertLines.length} NCERT lines by topic search`);
 
-            // If no lines found with topic, try broader search by subject only
             if (!ncertLines || ncertLines.length === 0) {
-                console.log(`[trackBySubjectAndTopic] No lines found for ${subject} - ${topic}, searching by subject only...`);
-                ncertLines = await NCERTLine.find({
-                    subject: { $regex: subject, $options: 'i' },
-                    isActive: true
-                }).limit(100);
-                console.log(`[trackBySubjectAndTopic] Found ${ncertLines.length} NCERT lines by subject search`);
-            }
-
-            // If still no lines, create mock NCERT lines for demo purposes
-            if (!ncertLines || ncertLines.length === 0) {
-                console.log(`[trackBySubjectAndTopic] No NCERT lines in database. Creating mock content for ${subject} - ${topic}`);
-                
-                // Create mock NCERT lines for the topic
-                const mockLines = [];
-                for (let i = 1; i <= 10; i++) {
-                    mockLines.push({
-                        lineId: `${subject}-${topic.replace(/\s+/g, '-')}-${i}`,
-                        subject: subject.toLowerCase(),
-                        class: 12,
-                        chapter: 1,
-                        pageNumber: i,
-                        lineNumber: i,
-                        ncertText: `${topic} - Concept ${i}: This is a mock NCERT line for demonstration purposes.`,
-                        context: `Learning about ${topic}`,
-                        conceptTags: [topic.toLowerCase()],
-                        isActive: true
-                    });
-                }
-                
-                try {
-                    const created = await NCERTLine.insertMany(mockLines);
-                    console.log(`[trackBySubjectAndTopic] ✅ Created ${created.length} mock NCERT lines`);
-                    ncertLines = created;
-                } catch (insertError) {
-                    console.log(`[trackBySubjectAndTopic] Insert failed (lines may exist): ${insertError.message}`);
-                    // Lines might already exist, just fetch them
-                    ncertLines = await NCERTLine.find({
-                        subject: { $regex: subject, $options: 'i' }
-                    }).limit(100);
-                }
-            }
-
-            if (!ncertLines || ncertLines.length === 0) {
-                throw new Error(`No NCERT lines available for ${subject} - ${topic}. Please check database or add content.`);
+                const notFoundError = new Error(
+                    `No NCERT lines found for "${topic}" in ${subject}. Please add mapped NCERT lines first.`
+                );
+                notFoundError.statusCode = 404;
+                throw notFoundError;
             }
 
             let addedCount = 0;
@@ -657,6 +835,54 @@ class NeuronzService {
         } catch (error) {
             console.error('[trackBySubjectAndTopic] Error:', error);
             throw new Error(`Failed to track topic: ${error.message}`);
+        }
+    }
+
+    static async getTopicAvailability(subject, topic) {
+        try {
+            if (!subject || !topic) {
+                return {
+                    subject: String(subject || '').toLowerCase(),
+                    topic: String(topic || ''),
+                    available: false,
+                    mappedLineCount: 0,
+                    sampleLines: []
+                };
+            }
+
+            const query = {
+                subject: { $regex: String(subject), $options: 'i' },
+                isActive: true,
+                ncertText: { $not: { $regex: this.MOCK_LINE_MARKER, $options: 'i' } },
+                $or: [
+                    { ncertText: { $regex: String(topic), $options: 'i' } },
+                    { conceptTags: { $regex: String(topic), $options: 'i' } }
+                ]
+            };
+
+            const [mappedLineCount, sampleLines] = await Promise.all([
+                NCERTLine.countDocuments(query),
+                NCERTLine.find(query)
+                    .select('lineId ncertText chapter class pageNumber')
+                    .sort({ chapter: 1, pageNumber: 1, lineNumber: 1 })
+                    .limit(3)
+            ]);
+
+            return {
+                subject: String(subject).toLowerCase(),
+                topic: String(topic),
+                available: mappedLineCount > 0,
+                mappedLineCount,
+                sampleLines: sampleLines.map((line) => ({
+                    lineId: line.lineId,
+                    text: line.ncertText,
+                    chapter: line.chapter,
+                    class: line.class,
+                    pageNumber: line.pageNumber
+                }))
+            };
+        } catch (error) {
+            throw new Error(`Failed to check topic availability: ${error.message}`);
         }
     }
 
@@ -760,10 +986,17 @@ class NeuronzService {
                 options: { strictPopulate: false }
             });
 
-            const { quizHistory, totalQuizzesSolved, totalCorrectAnswers, level, isMastered } = userLine;
+            // Get SessionAttempt records for this line
+            const sessions = await SessionAttempt.find({
+                userId: new mongoose.Types.ObjectId(userId),
+                lineId: String(lineId),
+                type: 'revision'
+            })
+            .sort({ sessionDate: -1 })
+            .limit(10);
 
             // Accuracy trend
-            const accuracyTrend = quizHistory.map((session, idx) => ({
+            const accuracyTrend = sessions.reverse().map((session, idx) => ({
                 sessionNumber: idx + 1,
                 date: session.sessionDate,
                 accuracy: session.accuracy,
@@ -777,13 +1010,13 @@ class NeuronzService {
                 : 0;
 
             // Time analysis
-            const timeSessions = quizHistory.filter(s => s.timeSpent && s.timeSpent > 0);
+            const timeSessions = sessions.filter(s => s.timeSpent && s.timeSpent > 0);
             const avgTime = timeSessions.length > 0
                 ? timeSessions.reduce((sum, s) => sum + s.timeSpent, 0) / timeSessions.length
                 : 0;
 
             // Mastery forecast
-            const masteryForecast = this.forecastMasteryDate(level, accuracyTrend);
+            const masteryForecast = this.forecastMasteryDate(userLine.level, accuracyTrend);
 
             // Streak info
             const currentStreak = userLine.streak || 0;
@@ -791,8 +1024,8 @@ class NeuronzService {
             return {
                 lineId,
                 topic: userLine.lineId?.ncertText || 'Unknown',
-                currentLevel: level,
-                isMastered,
+                currentLevel: userLine.level,
+                isMastered: userLine.isMastered,
                 overallAccuracy: Math.round(userLine.overallAccuracy || 0),
                 recentAccuracy: Math.round(recentAccuracy),
                 totalSessions: userLine.totalSessions || 0,

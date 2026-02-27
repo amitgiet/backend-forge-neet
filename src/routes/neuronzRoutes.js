@@ -13,7 +13,12 @@ const {
     adjustLineLevel,
     customizeSchedule,
     getLineAnalytics,
-    cleanupUserLines
+    cleanupUserLines,
+    getTopicSummary,
+    getTopicDueLines,
+    startTopicBaseline,
+    getTopicAvailability
+    , getTopicSubmissionHistory
 } = require('../controllers/neuronzController');
 
 const { protect } = require('../middleware/auth');
@@ -58,6 +63,26 @@ router.post('/track-chapter', trackChapter);
 // @route   POST /api/neuronz/track-topic
 // @desc    Track by subject and topic for NeuronZ practice
 router.post('/track-topic', trackBySubjectAndTopic);
+
+// @route   GET /api/neuronz/topics/summary
+// @desc    Topic-level summary for revision/dashboard cards
+router.get('/topics/summary', getTopicSummary);
+
+// @route   GET /api/neuronz/topics/availability
+// @desc    Check if topic has mapped NCERT lines
+router.get('/topics/availability', getTopicAvailability);
+
+// @route   GET /api/neuronz/topics/:topicId/due
+// @desc    Due lines for a single topic
+router.get('/topics/:topicId/due', getTopicDueLines);
+
+// @route   GET /api/neuronz/topics/:topicId/history
+// @desc    Past submissions for a topic
+router.get('/topics/:topicId/history', getTopicSubmissionHistory);
+
+// @route   POST /api/neuronz/topics/:topicId/baseline
+// @desc    Build baseline line set for selected topic
+router.post('/topics/:topicId/baseline', startTopicBaseline);
 
 // @route   GET /api/neuronz/level/:level
 // @desc    Get lines by specific level

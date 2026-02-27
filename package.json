@@ -10,6 +10,7 @@
     "seed": "node src/seeders/seedAll.js",
     "seed:chapters": "node src/seeders/seedChapters.js",
     "seed:questions": "node src/seeders/seedQuestions.js",
+    "seed:ncert-lines:sample": "node scripts/seedSampleNCERTLines.js",
     "migrate:ncert-content-source": "node scripts/normalizeNcertContentSource.js",
     "feed:bio12:english": "node scripts/feedClass12BiologyEnglishUrls.js",
     "test": "jest --watchAll --verbose"

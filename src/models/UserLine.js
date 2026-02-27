@@ -38,16 +38,10 @@ const UserLineSchema = new mongoose.Schema({
         default: 0
     },
     
-    // Quiz session history for this line
-    quizHistory: [{
-        sessionDate: { type: Date, default: Date.now },
-        quizzesAttempted: { type: Number, default: 4 }, // Always 4 micro-quizzes per session
-        correctAnswers: { type: Number, required: true },
-        accuracy: { type: Number }, // correctAnswers / quizzesAttempted * 100
-        levelAfter: { type: Number, required: true },
-        timeSpent: { type: Number }, // seconds for entire session
-        isAdjustment: { type: Boolean, default: false }, // True if manually adjusted
-        adjustmentReason: String // 'user-request', 'admin', 'boost', etc.
+    // References to SessionAttempt records (revision type only)
+    sessionAttemptIds: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'SessionAttempt'
     }],
     
     // Total stats for this line
@@ -132,20 +126,7 @@ UserLineSchema.methods.updateLevel = function(correctAnswers, totalQuizzes = 4, 
     // Calculate overall accuracy
     this.overallAccuracy = Math.round((this.totalCorrectAnswers / this.totalQuizzesSolved) * 100);
     
-    // Add to history (keep last 10 sessions)
-    this.quizHistory.push({
-        sessionDate: this.lastReviewed,
-        quizzesAttempted: totalQuizzes,
-        correctAnswers,
-        accuracy: Math.round(accuracy),
-        levelAfter: this.level,
-        timeSpent
-    });
-    
-    if (this.quizHistory.length > 10) {
-        this.quizHistory = this.quizHistory.slice(-10);
-    }
-    
+    // SessionAttempt will be created separately by the service
     return this;
 };
 
