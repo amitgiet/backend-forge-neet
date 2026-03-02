@@ -54,7 +54,7 @@ app.use(helmet());
 // CORS
 const allowedOrigins = [
     process.env.FRONTEND_URL || 'http://localhost:3000',
-    'http://localhost:8080',"https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app", "https://neetforge.vercel.app/"
+    'http://localhost:8080', "https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app", "https://neetforge.vercel.app/"
 ];
 
 const corsOptions = {
@@ -155,6 +155,7 @@ app.use(`/api/${API_VERSION}/ncert-search`, require('./src/routes/ncertSearchRou
 app.use(`/api/${API_VERSION}/ai-chat`, require('./src/routes/aiChatRoutes'));
 app.use(`/api/${API_VERSION}/quick-quiz`, require('./src/routes/quickQuizRoutes'));
 app.use(`/api/${API_VERSION}/pyq-marked-ncert`, require('./src/routes/pyqMarkedNCERTRoutes'));
+app.use(`/api/${API_VERSION}/curriculum`, require('./src/routes/curriculumRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));
