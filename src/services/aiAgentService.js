@@ -1,6 +1,10 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const AITools = require('./aiTools');
 const AIAnalysisService = require('./aiAnalysisService');
+const PROMPT_TEMPLATES = require('../config/promptTemplates');
+const DataSummaryService = require('./dataSummaryService');
+// AIUsage is optional telemetry to track prompt usage and tools called
+const AIUsage = require('../models/AIUsage');
 
 class AIAgentService {
     constructor() {
@@ -555,16 +559,7 @@ class AIAgentService {
             const User = require('../models/User');
             const user = await User.findById(userId).lean();
             
-            const userContext = user ? `
-Student Profile:
-- Name: ${user.name}
-- Target Exam: ${user.targetExam || 'NEET'}
-- Target Year: ${user.targetYear || 'Not set'}
-- Current Class: ${user.currentClass || 'Not set'}
-- Study Hours Goal: ${user.analytics?.weeklyGoalHours || 42} hours/week
-- Current Level: ${user.gamification?.level || 1}
-- Total XP: ${user.gamification?.totalXP || 0}
-` : '';
+            const userContext = user ? `Student Profile:\n- Name: ${user.name}\n- Target Exam: ${user.targetExam || 'NEET'}\n- Target Year: ${user.targetYear || 'Not set'}\n- Current Class: ${user.currentClass || 'Not set'}\n- Study Hours Goal: ${user.analytics?.weeklyGoalHours || 42} hours/week\n- Current Level: ${user.gamification?.level || 1}\n- Total XP: ${user.gamification?.totalXP || 0}` : '';
 
             // Gemini requires history to start with a user role.
             const normalizedHistory = Array.isArray(chatHistory) ? [...chatHistory] : [];
@@ -587,42 +582,25 @@ Student Profile:
                 ? `\n\nChat memory (rolling summary):\n${String(chatSummary).trim()}\n`
                 : '';
 
-            const systemPrompt = `You are an AI study assistant for NEET exam preparation. You help students analyze their performance, identify weak areas, and provide study recommendations.
-${userContext}
-${memoryBlock}
+            // Build a compact, DB-driven summary to inject into the system prompt.
+            const dataSummary = await DataSummaryService.generateMasterSummary(userId);
 
-CRITICAL RULES - NO GUESSING:
-- NEVER calculate accuracy yourself - ONLY use tool data
-- NEVER invent scores or statistics
-- If tool returns empty/null, say "No data available" - do NOT make up numbers
-- ONLY explain and interpret data from tools - do NOT compute
+            // Short-circuit if not enough data to perform reliable analysis.
+            // Use exact deterministic message required by product spec when data insufficient.
+            if (!dataSummary.isSufficient) {
+                return {
+                    message: "No sufficient performance data available to generate analysis."
+                };
+            }
 
-Formatting Guidelines:
-- Use **bold** for important points and numbers
-- Use bullet points (- ) for lists
-- Use numbered lists (1. 2. 3.) for steps
-- Use ## for section headers
-- Keep responses concise and well-structured
+            const template = PROMPT_TEMPLATES.MASTER_SYSTEM_PROMPT || '';
+            const populated = template
+                .replace('{STUDENT_CONTEXT}', userContext)
+                .replace('{CHAT_MEMORY}', memoryBlock)
+                .replace('{SUMMARY_TEXT}', dataSummary.summaryText || 'No data available')
+                + `\nCurrent date: ${new Date().toLocaleDateString()}`;
 
-QUIZ SUGGESTIONS - CRITICAL:
-When user asks for quizzes (e.g., "organic chemistry quiz", "physics quizzes", "suggest quiz", "give me quiz"), you MUST:
-1. Call suggestQuizzes tool with the user's **topic** (if any). Only pass 'subject' when it clearly matches a supported subject (physics/chemistry/biology/mathematics). Do NOT refuse topic-only requests.
-2. After receiving tool results, format your response EXACTLY as:
-   Brief intro text
-   {"type":"quizzes","data":[{"quizId":"optional_if_present","lineId":"optional_if_present","topic":"actual_topic","subject":"actual_subject","chapter":"actual_chapter"}]}
-3. The JSON MUST be on its own line and contain the ACTUAL data from the tool result
-4. The ids MUST be complete and usable. NEVER shorten ids with "..." or omit characters. If quizId is present, it should be a full 24-character hex MongoDB ObjectId string.
-5. Do NOT describe the quizzes in text - ONLY output the JSON with actual ids (quizId/lineId) from tool result
-
-Example correct format:
-Here are some chemistry quizzes for you:
-{"type":"quizzes","data":[{"quizId":"507f1f77bcf86cd799439011","topic":"Electrochemistry","subject":"chemistry","chapter":"3"}]}
-
-Be concise, encouraging, and actionable. Use the available tools to fetch real data.
-When showing data with multiple items, format as JSON for charts: {"type":"chart","chartType":"bar|pie","data":[{"name":"X","value":Y}],"message":"text"}
-Current date: ${new Date().toLocaleDateString()}`;
-
-            let result = await chat.sendMessage(systemPrompt + '\n\nStudent: ' + message);
+            let result = await chat.sendMessage(populated + '\n\nStudent: ' + message);
             let response = result.response;
 
             const maxIterations = 5;
@@ -674,6 +652,18 @@ Current date: ${new Date().toLocaleDateString()}`;
 
             // Validate JSON formats before sending
             const validatedResponse = this.validateResponseJSON(responseText);
+
+            // Record a lightweight AI usage event (best-effort)
+            try {
+                await AIUsage.create({
+                    userId,
+                    model: this.model ? (this.model.model || 'gemini-2.5-flash-lite') : 'gemini-2.5-flash-lite',
+                    promptType: 'master_injected',
+                    meta: { toolsUsed: toolsUsedList }
+                });
+            } catch (e) {
+                console.warn('Failed to persist AIUsage:', e && e.message);
+            }
 
             return {
                 message: validatedResponse

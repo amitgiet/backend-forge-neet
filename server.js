@@ -154,6 +154,7 @@ app.use(`/api/${API_VERSION}/daily-challenge`, require('./src/routes/dailyChalle
 app.use(`/api/${API_VERSION}/ncert-search`, require('./src/routes/ncertSearchRoutes'));
 app.use(`/api/${API_VERSION}/ai-chat`, require('./src/routes/aiChatRoutes'));
 app.use(`/api/${API_VERSION}/quick-quiz`, require('./src/routes/quickQuizRoutes'));
+app.use(`/api/${API_VERSION}/pyq-marked-ncert`, require('./src/routes/pyqMarkedNCERTRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));
