@@ -65,6 +65,7 @@ const resolveLocalizedContentSource = (contentSource, lang) => {
 
     return null;
 };
+const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
 
 const getQuestionCorrectKey = (question) => {
     if (question.correctAnswer) return question.correctAnswer;
@@ -168,8 +169,9 @@ exports.proxyNcertPdf = async (req, res, next) => {
             "'self'",
             'http://localhost:8080',
             'http://localhost:3000',
-            process.env.FRONTEND_URL,
-            process.env.FRONTEND_URL_PROD
+            'http://localhost:5173',
+            normalizeOrigin(process.env.FRONTEND_URL),
+            normalizeOrigin(process.env.FRONTEND_URL_PROD)
         ].filter(Boolean);
 
         // Override helmet defaults for this proxied PDF response so it can be embedded in frontend iframe

@@ -3,6 +3,7 @@ const {
   getTopicsBySubject,
   getAllPYQData,
   getTopicById,
+  proxyPyqHtml,
   addTopic,
   updateTopic,
   deleteTopic
@@ -13,6 +14,7 @@ const router = express.Router();
 // Public routes
 router.get('/all', getAllPYQData);
 router.get('/topics', getTopicsBySubject);
+router.get('/html-proxy', proxyPyqHtml);
 router.get('/:topicId', getTopicById);
 
 // Admin routes (protected)

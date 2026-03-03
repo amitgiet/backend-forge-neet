@@ -262,7 +262,11 @@ exports.getSubTopics = async (req, res) => {
 
         const activeRunMap = {};
         activeRuns.forEach((run) => {
-            activeRunMap[makeProgressKey(run.topic, run.subTopic)] = {
+            const key = makeProgressKey(run.topic, run.subTopic);
+            if (!activeRunMap[key]) {
+                activeRunMap[key] = { practice: null, test: null };
+            }
+            activeRunMap[key][run.mode === 'test' ? 'test' : 'practice'] = {
                 runId: String(run._id),
                 mode: run.mode,
                 attemptedQuestions: Number(run.attemptedQuestions || 0),
@@ -283,7 +287,8 @@ exports.getSubTopics = async (req, res) => {
                     lastScore: 0,
                     lastAttemptAt: null,
                 };
-                const activeRun = activeRunMap[makeProgressKey(t.topic, st.subTopic)] || null;
+                const activeRunsByMode = activeRunMap[makeProgressKey(t.topic, st.subTopic)] || { practice: null, test: null };
+                const activeRun = activeRunsByMode.test || activeRunsByMode.practice || null;
 
                 return {
                     subTopic: st.subTopic,
@@ -302,6 +307,7 @@ exports.getSubTopics = async (req, res) => {
                         completed: Number(progress.bestScore || 0) >= 60,
                     },
                     activeRun,
+                    activeRuns: activeRunsByMode,
                 };
             }),
         }));

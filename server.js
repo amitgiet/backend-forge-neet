@@ -49,12 +49,34 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 // Security headers
-app.use(helmet());
+const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
+const allowedFrameAncestors = [
+    "'self'",
+    normalizeOrigin(process.env.FRONTEND_URL) || 'http://localhost:3000',
+    'http://localhost:8080',
+    'http://localhost:5173',
+    normalizeOrigin(process.env.FRONTEND_URL_PROD)
+].filter(Boolean);
+
+app.use(
+    helmet({
+        frameguard: false,
+        contentSecurityPolicy: {
+            useDefaults: true,
+            directives: {
+                frameAncestors: allowedFrameAncestors
+            }
+        }
+    })
+);
 
 // CORS
 const allowedOrigins = [
-    process.env.FRONTEND_URL || 'http://localhost:3000',
-    'http://localhost:8080', "https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app", "https://neetforge.vercel.app/"
+    normalizeOrigin(process.env.FRONTEND_URL) || 'http://localhost:3000',
+    'http://localhost:8080',
+    'http://localhost:5173',
+    "https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app",
+    "https://neetforge.vercel.app"
 ];
 
 const corsOptions = {
