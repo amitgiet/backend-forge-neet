@@ -2,6 +2,68 @@ const MockTest = require('../models/MockTest');
 const TestAttempt = require('../models/TestAttempt');
 const MockTestProgress = require('../models/MockTestProgress');
 const ErrorResponse = require('../utils/errorResponse');
+const http = require('http');
+const https = require('https');
+
+const normalizeOrigin = (value) => String(value || '').trim().replace(/\/+$/, '');
+
+const ALLOWED_MOCK_PDF_HOSTS = new Set([
+    'memoneet.xyz',
+    'www.memoneet.xyz',
+    '216.48.182.197',
+]);
+
+const downloadPdfOnce = (urlString, redirectCount = 0) => new Promise((resolve, reject) => {
+    if (redirectCount > 5) {
+        return reject(new Error('Too many redirects while fetching PDF'));
+    }
+
+    let parsed;
+    try {
+        parsed = new URL(urlString);
+    } catch (error) {
+        return reject(new Error('Invalid PDF URL'));
+    }
+
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request(parsed, {
+        method: 'GET',
+        headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': 'application/pdf,*/*',
+            'Connection': 'close'
+        }
+    }, (response) => {
+        const statusCode = response.statusCode || 0;
+
+        if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
+            const redirectUrl = new URL(response.headers.location, parsed).toString();
+            response.resume();
+            return resolve(downloadPdfOnce(redirectUrl, redirectCount + 1));
+        }
+
+        if (statusCode < 200 || statusCode >= 300) {
+            response.resume();
+            return reject(new Error(`Upstream returned ${statusCode}`));
+        }
+
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => {
+            resolve({
+                buffer: Buffer.concat(chunks),
+                headers: response.headers
+            });
+        });
+        response.on('error', reject);
+    });
+
+    req.setTimeout(15000, () => {
+        req.destroy(new Error('PDF fetch timeout'));
+    });
+    req.on('error', reject);
+    req.end();
+});
 
 // @desc    Get all mock tests available for the user
 // @route   GET /api/v1/mocks
@@ -170,6 +232,49 @@ exports.submitTestAttempt = async (req, res, next) => {
             success: true,
             data: attempt
         });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Proxy mock test PDF for in-app iframe rendering
+// @route   GET /api/v1/mocks/pdf-proxy?url=...
+// @access  Public
+exports.proxyMockPdf = async (req, res, next) => {
+    try {
+        const rawUrl = req.query.url;
+        if (!rawUrl) {
+            return next(new ErrorResponse('url query param is required', 400));
+        }
+
+        let parsed;
+        try {
+            parsed = new URL(String(rawUrl));
+        } catch (error) {
+            return next(new ErrorResponse('Invalid url', 400));
+        }
+
+        if (!ALLOWED_MOCK_PDF_HOSTS.has(parsed.hostname)) {
+            return next(new ErrorResponse('PDF host is not allowed', 403));
+        }
+
+        const upstream = await downloadPdfOnce(parsed.toString(), 0);
+        const allowedFrameAncestors = [
+            "'self'",
+            'http://localhost:8080',
+            'http://localhost:3000',
+            'http://localhost:5173',
+            normalizeOrigin(process.env.FRONTEND_URL),
+            normalizeOrigin(process.env.FRONTEND_URL_PROD)
+        ].filter(Boolean);
+
+        res.removeHeader('X-Frame-Options');
+        res.setHeader('Content-Security-Policy', `frame-ancestors ${allowedFrameAncestors.join(' ')};`);
+        res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/pdf');
+        res.setHeader('Content-Disposition', upstream.headers['content-disposition'] || 'inline');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+
+        return res.status(200).send(upstream.buffer);
     } catch (error) {
         next(error);
     }

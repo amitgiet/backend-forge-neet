@@ -3,11 +3,14 @@ const {
   getMockTests,
   getMockProgress,
   markMockCompleted,
+  proxyMockPdf,
   startTestAttempt,
   submitTestAttempt
 } = require('../controllers/mockController');
 const { protect } = require('../middleware/auth');
 const router = express.Router();
+
+router.get('/pdf-proxy', proxyMockPdf);
 
 router.use(protect);
 
