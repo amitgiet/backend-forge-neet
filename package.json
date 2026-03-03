@@ -12,6 +12,7 @@
     "seed:questions": "node src/seeders/seedQuestions.js",
     "seed:pyq-marked-ncert": "node scripts/seedPYQMarkedNCERT.js",
     "seed:ncert-lines:sample": "node scripts/seedSampleNCERTLines.js",
+    "import:mock-tests": "node scripts/importMockTestsFromJson.js",
     "migrate:ncert-content-source": "node scripts/normalizeNcertContentSource.js",
     "feed:bio12:english": "node scripts/feedClass12BiologyEnglishUrls.js",
     "test": "jest --watchAll --verbose"

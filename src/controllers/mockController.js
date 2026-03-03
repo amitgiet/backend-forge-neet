@@ -1,5 +1,6 @@
 const MockTest = require('../models/MockTest');
 const TestAttempt = require('../models/TestAttempt');
+const MockTestProgress = require('../models/MockTestProgress');
 const ErrorResponse = require('../utils/errorResponse');
 
 // @desc    Get all mock tests available for the user
@@ -7,20 +8,86 @@ const ErrorResponse = require('../utils/errorResponse');
 // @access  Private
 exports.getMockTests = async (req, res, next) => {
     try {
-        const { examType, testType } = req.query;
+        const { examType, testType, classCategory, freeOnly } = req.query;
         const accessLevel = req.user.subscription.plan;
 
-        const tests = await MockTest.getTestsByExam(
+        let tests = await MockTest.getTestsByExam(
             examType || req.user.primaryExam || 'NEET_UG',
             testType,
             accessLevel
         );
 
+        if (classCategory && classCategory !== 'all') {
+            tests = tests.filter((t) => t.classCategory === classCategory);
+        }
+        if (freeOnly === 'true') {
+            tests = tests.filter((t) => t.accessType === 'FREE');
+        }
+
+        const testIds = tests.map((t) => t.testId);
+        const progressDocs = await MockTestProgress.find({
+            userId: req.user.id,
+            testId: { $in: testIds }
+        }).lean();
+        const progressMap = new Map(progressDocs.map((p) => [p.testId, p]));
+
+        const data = tests.map((t) => {
+            const p = progressMap.get(t.testId);
+            return {
+                ...t.toObject(),
+                progress: {
+                    completed: Boolean(p?.completed),
+                    completedAt: p?.completedAt || null
+                }
+            };
+        });
+
         res.status(200).json({
             success: true,
-            count: tests.length,
-            data: tests
+            count: data.length,
+            data
         });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get mock completion progress for current user
+// @route   GET /api/v1/mocks/progress
+// @access  Private
+exports.getMockProgress = async (req, res, next) => {
+    try {
+        const rows = await MockTestProgress.find({ userId: req.user.id }).lean();
+        res.status(200).json({ success: true, count: rows.length, data: rows });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Mark mock completed / uncompleted
+// @route   POST /api/v1/mocks/:id/complete
+// @access  Private
+exports.markMockCompleted = async (req, res, next) => {
+    try {
+        const test = await MockTest.findById(req.params.id).select('testId');
+        if (!test) {
+            return next(new ErrorResponse(`Mock test not found with id of ${req.params.id}`, 404));
+        }
+
+        const completed = req.body?.completed !== false;
+        const progress = await MockTestProgress.findOneAndUpdate(
+            { userId: req.user.id, testId: test.testId },
+            {
+                $set: {
+                    completed,
+                    completedAt: completed ? new Date() : null,
+                    notes: String(req.body?.notes || '')
+                }
+            },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({ success: true, data: progress });
     } catch (error) {
         next(error);
     }

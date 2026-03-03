@@ -1,11 +1,19 @@
 const express = require('express');
-const { getMockTests, startTestAttempt, submitTestAttempt } = require('../controllers/mockController');
+const {
+  getMockTests,
+  getMockProgress,
+  markMockCompleted,
+  startTestAttempt,
+  submitTestAttempt
+} = require('../controllers/mockController');
 const { protect } = require('../middleware/auth');
 const router = express.Router();
 
 router.use(protect);
 
 router.get('/', getMockTests);
+router.get('/progress', getMockProgress);
+router.post('/:id/complete', markMockCompleted);
 router.post('/:id/start', startTestAttempt);
 router.post('/attempt/:attemptId/submit', submitTestAttempt);
 

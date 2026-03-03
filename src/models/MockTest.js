@@ -120,6 +120,31 @@ const MockTestSchema = new mongoose.Schema({
 
     year: Number, // For PYQ tests
 
+    // Imported test-series metadata
+    source: {
+        originalTestType: String,
+        testFor: [String], // e.g. ['11','12','dropper','neet24']
+        isFree: { type: Boolean, default: true },
+        isHidden: { type: Boolean, default: false },
+        index: Number
+    },
+
+    // Convenience field for UI filtering
+    classCategory: {
+        type: String,
+        enum: ['11', '12', 'dropper', 'mixed', 'other'],
+        default: 'other'
+    },
+
+    // External resources
+    resources: {
+        questionPdf: String,
+        answerPdf: String,
+        hindiQuestionPdf: String,
+        hindiAnswerPdf: String,
+        lectures: [String]
+    },
+
     // Statistics
     stats: {
         totalAttempts: { type: Number, default: 0 },
@@ -148,6 +173,8 @@ MockTestSchema.index({ examType: 1, testType: 1 });
 MockTestSchema.index({ accessType: 1, isActive: 1 });
 MockTestSchema.index({ isLive: 1, scheduledAt: -1 });
 MockTestSchema.index({ tags: 1 });
+MockTestSchema.index({ classCategory: 1, isActive: 1 });
+MockTestSchema.index({ 'source.testFor': 1 });
 
 // Virtual for attempt count
 MockTestSchema.virtual('attempts', {
