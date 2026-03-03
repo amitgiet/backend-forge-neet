@@ -7,6 +7,12 @@ const {
     getTopicsByChapter,
     getSubTopics,
     getQuestionsByUIDs,
+    trackSubTopicAttempt,
+    startCurriculumRun,
+    getCurriculumRun,
+    updateCurriculumRunProgress,
+    abandonCurriculumRun,
+    submitCurriculumRun,
 } = require('../controllers/curriculumController');
 
 // All curriculum routes require authentication
@@ -14,6 +20,13 @@ router.use(protect);
 
 // List available subjects
 router.get('/subjects', getSubjectList);
+
+// Curriculum quiz run lifecycle
+router.post('/runs/start', startCurriculumRun);
+router.get('/runs/:runId', getCurriculumRun);
+router.put('/runs/:runId/progress', updateCurriculumRunProgress);
+router.post('/runs/:runId/abandon', abandonCurriculumRun);
+router.post('/runs/:runId/submit', submitCurriculumRun);
 
 // List all chapters for a subject
 router.get('/:subject/chapters', getAllChapters);
@@ -26,5 +39,8 @@ router.get('/:subject/chapters/:chapterId/subtopics', getSubTopics);
 
 // Fetch actual questions by UID list: ?uids=10101,10102&page=1&limit=20
 router.get('/questions', getQuestionsByUIDs);
+
+// Track imported curriculum quiz attempt per sub-topic
+router.post('/attempts', trackSubTopicAttempt);
 
 module.exports = router;

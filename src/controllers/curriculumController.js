@@ -1,8 +1,134 @@
 const ImportedCurriculum = require('../models/ImportedCurriculum');
 const ImportedQuestion = require('../models/ImportedQuestion');
+const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
+const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun');
 
-// ── GET /api/v1/curriculum/subjects ─────────────────────────────────────────
-// Returns the 3 available subject keys
+const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
+const RUN_EXPIRY_HOURS = 24;
+
+const makeProgressKey = (topic, subTopic) => `${String(topic)}|||${String(subTopic)}`;
+const nowUtc = () => new Date();
+const addHours = (date, hours) => new Date(date.getTime() + hours * 60 * 60 * 1000);
+const optionIndexToKey = (index) => String.fromCharCode(65 + Number(index));
+
+const sanitizeAnswers = (rawAnswers = [], total = 0) => {
+    const targetLength = Math.max(0, Number(total) || 0);
+    const answers = Array.isArray(rawAnswers) ? rawAnswers : [];
+    const normalized = [];
+    for (let i = 0; i < targetLength; i += 1) {
+        const value = answers[i];
+        const idx = Number(value);
+        normalized.push(Number.isInteger(idx) && idx >= 0 ? idx : -1);
+    }
+    return normalized;
+};
+
+const sanitizeTimes = (rawTimes = [], total = 0) => {
+    const targetLength = Math.max(0, Number(total) || 0);
+    const times = Array.isArray(rawTimes) ? rawTimes : [];
+    const normalized = [];
+    for (let i = 0; i < targetLength; i += 1) {
+        const value = Number(times[i]);
+        normalized.push(Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
+    }
+    return normalized;
+};
+
+const countAttempted = (answers = []) => answers.filter((a) => Number(a) >= 0).length;
+
+const serializeRun = (runDoc) => {
+    const run = runDoc?.toObject ? runDoc.toObject() : runDoc;
+    if (!run) return null;
+    return {
+        runId: String(run._id),
+        subject: run.subject,
+        chapterId: run.chapterId,
+        topic: run.topic,
+        subTopic: run.subTopic,
+        mode: run.mode,
+        status: run.status,
+        uids: run.uids || [],
+        currentIndex: Number(run.currentIndex || 0),
+        answers: Array.isArray(run.answers) ? run.answers.map((a) => (Number(a) >= 0 ? Number(a) : null)) : [],
+        questionTimes: Array.isArray(run.questionTimes) ? run.questionTimes.map((t) => Number(t) || 0) : [],
+        attemptedQuestions: Number(run.attemptedQuestions || 0),
+        elapsedSeconds: Number(run.elapsedSeconds || 0),
+        remainingSeconds: run.remainingSeconds === null || run.remainingSeconds === undefined
+            ? null
+            : Number(run.remainingSeconds),
+        resumeCount: Number(run.resumeCount || 0),
+        maxResumes: Number(run.maxResumes || 0),
+        resumeRemaining: Math.max(0, Number(run.maxResumes || 0) - Number(run.resumeCount || 0)),
+        startedAt: run.startedAt || null,
+        lastActivityAt: run.lastActivityAt || null,
+        expiresAt: run.expiresAt || null,
+        submittedAt: run.submittedAt || null,
+        abandonedAt: run.abandonedAt || null,
+        correctAnswers: Number(run.correctAnswers || 0),
+        totalQuestions: Number(run.totalQuestions || (run.uids || []).length || 0),
+        percentage: Number(run.percentage || 0),
+    };
+};
+
+const expireStaleRuns = async (userId) => {
+    const filter = {
+        status: 'in_progress',
+        expiresAt: { $lt: nowUtc() },
+    };
+    if (userId) filter.userId = userId;
+    await ImportedCurriculumQuizRun.updateMany(filter, {
+        $set: {
+            status: 'expired',
+            lastActivityAt: nowUtc(),
+        },
+    });
+};
+
+const getImportedQuestionsByUIDs = async (uids = []) => {
+    const uidList = Array.isArray(uids) ? uids.map((u) => String(u)).filter(Boolean) : [];
+    if (uidList.length === 0) return [];
+    const questionDocs = await ImportedQuestion.find({ questionId: { $in: uidList } }).lean();
+    const questionMap = {};
+    questionDocs.forEach((q) => {
+        questionMap[String(q.questionId)] = q;
+    });
+    return uidList.map((uid) => questionMap[uid]).filter(Boolean);
+};
+
+const isImportedAnswerCorrect = (question, selectedIndex) => {
+    if (!question || !Number.isInteger(selectedIndex) || selectedIndex < 0) return false;
+
+    const selectedKey = optionIndexToKey(selectedIndex);
+    const correctOption = String(question.correct_option || '').trim().toUpperCase();
+    if (['A', 'B', 'C', 'D'].includes(correctOption)) {
+        return selectedKey === correctOption;
+    }
+
+    const selectedText = String(question.options?.[selectedKey] || '').trim().toLowerCase();
+    const correctText = String(question.correct_answer || '').trim().toLowerCase();
+    if (!selectedText || !correctText) return false;
+    return selectedText === correctText;
+};
+
+const evaluateRunScore = (questions = [], answers = []) => {
+    let correctAnswers = 0;
+    const evaluated = questions.map((question, index) => {
+        const selectedIndex = Number(answers[index]);
+        const normalized = Number.isInteger(selectedIndex) && selectedIndex >= 0 ? selectedIndex : -1;
+        const isCorrect = isImportedAnswerCorrect(question, normalized);
+        if (isCorrect) correctAnswers += 1;
+        return {
+            questionId: String(question.questionId),
+            selectedIndex: normalized >= 0 ? normalized : null,
+            isCorrect,
+        };
+    });
+
+    const totalQuestions = questions.length;
+    const percentage = totalQuestions > 0 ? Math.round((correctAnswers / totalQuestions) * 100) : 0;
+    return { correctAnswers, totalQuestions, percentage, evaluated };
+};
+
 exports.getSubjectList = async (req, res) => {
     try {
         res.json({
@@ -15,25 +141,20 @@ exports.getSubjectList = async (req, res) => {
     }
 };
 
-// ── GET /api/v1/curriculum/:subject/chapters ─────────────────────────────────
-// Returns all chapter documents for a subject (lean, without the full topics array)
 exports.getAllChapters = async (req, res) => {
     try {
         const { subject } = req.params;
-        const validSubjects = ['biology', 'chemistry', 'physics'];
-        if (!validSubjects.includes(subject.toLowerCase())) {
+        if (!VALID_SUBJECTS.includes(subject.toLowerCase())) {
             return res.status(400).json({
                 success: false,
-                error: `Invalid subject. Must be one of: ${validSubjects.join(', ')}`,
+                error: `Invalid subject. Must be one of: ${VALID_SUBJECTS.join(', ')}`,
             });
         }
 
         const chapters = await ImportedCurriculum.find(
             { subject: subject.toLowerCase() },
             { _id: 1, subject: 1, type: 1, isHidden: 1, order: 1 }
-        )
-            .sort({ order: 1 })
-            .lean();
+        ).sort({ order: 1 }).lean();
 
         res.json({ success: true, count: chapters.length, data: chapters });
     } catch (err) {
@@ -42,8 +163,6 @@ exports.getAllChapters = async (req, res) => {
     }
 };
 
-// ── GET /api/v1/curriculum/:subject/chapters/:chapterId/topics ───────────────
-// Returns the topics array for a specific chapter (without sub_topics.uids for a lighter response)
 exports.getTopicsByChapter = async (req, res) => {
     try {
         const { subject, chapterId } = req.params;
@@ -54,10 +173,7 @@ exports.getTopicsByChapter = async (req, res) => {
         ).lean();
 
         if (!chapter) {
-            return res.status(404).json({
-                success: false,
-                error: 'Chapter not found',
-            });
+            return res.status(404).json({ success: false, error: 'Chapter not found' });
         }
 
         res.json({ success: true, chapterId, data: chapter.topics });
@@ -67,46 +183,127 @@ exports.getTopicsByChapter = async (req, res) => {
     }
 };
 
-// ── GET /api/v1/curriculum/:subject/chapters/:chapterId/subtopics ─────────────
-// Query param: ?topic=<topic name>
-// Returns all sub_topics for the given topic inside a chapter (includes uid counts)
 exports.getSubTopics = async (req, res) => {
     try {
         const { subject, chapterId } = req.params;
         const topicName = req.query.topic;
+        const normalizedSubject = String(subject || '').toLowerCase();
 
-        const matchFilter = { _id: chapterId, subject: subject.toLowerCase() };
+        if (!VALID_SUBJECTS.includes(normalizedSubject)) {
+            return res.status(400).json({
+                success: false,
+                error: `Invalid subject. Must be one of: ${VALID_SUBJECTS.join(', ')}`,
+            });
+        }
 
-        const chapter = await ImportedCurriculum.findOne(matchFilter).lean();
-
+        const chapter = await ImportedCurriculum.findOne({ _id: chapterId, subject: normalizedSubject }).lean();
         if (!chapter) {
             return res.status(404).json({ success: false, error: 'Chapter not found' });
         }
 
         let topics = chapter.topics;
-
-        // Filter by topic name if provided
         if (topicName) {
-            topics = topics.filter(
-                (t) => t.topic.toLowerCase() === topicName.toLowerCase()
-            );
+            topics = topics.filter((t) => t.topic.toLowerCase() === String(topicName).toLowerCase());
             if (topics.length === 0) {
                 return res.status(404).json({ success: false, error: 'Topic not found' });
             }
         }
 
-        // Build response with uid counts instead of raw uid arrays (for performance)
+        await expireStaleRuns(req.user.id);
+
+        const attempts = await ImportedSubtopicAttempt.find(
+            {
+                userId: req.user.id,
+                subject: normalizedSubject,
+                chapterId: String(chapterId),
+            },
+            { topic: 1, subTopic: 1, percentage: 1, attemptedAt: 1 }
+        ).sort({ attemptedAt: -1 }).lean();
+
+        const progressMap = {};
+        attempts.forEach((attempt) => {
+            const key = makeProgressKey(attempt.topic, attempt.subTopic);
+            if (!progressMap[key]) {
+                progressMap[key] = {
+                    hasTaken: true,
+                    attempts: 0,
+                    bestScore: 0,
+                    lastScore: Number(attempt.percentage || 0),
+                    lastAttemptAt: attempt.attemptedAt || null,
+                };
+            }
+            progressMap[key].attempts += 1;
+            progressMap[key].bestScore = Math.max(
+                Number(progressMap[key].bestScore || 0),
+                Number(attempt.percentage || 0)
+            );
+        });
+
+        const activeRuns = await ImportedCurriculumQuizRun.find(
+            {
+                userId: req.user.id,
+                subject: normalizedSubject,
+                chapterId: String(chapterId),
+                status: 'in_progress',
+            },
+            {
+                topic: 1,
+                subTopic: 1,
+                mode: 1,
+                attemptedQuestions: 1,
+                totalQuestions: 1,
+                lastActivityAt: 1,
+                expiresAt: 1,
+                resumeCount: 1,
+                maxResumes: 1,
+                uids: 1,
+            }
+        ).lean();
+
+        const activeRunMap = {};
+        activeRuns.forEach((run) => {
+            activeRunMap[makeProgressKey(run.topic, run.subTopic)] = {
+                runId: String(run._id),
+                mode: run.mode,
+                attemptedQuestions: Number(run.attemptedQuestions || 0),
+                totalQuestions: Number(run.totalQuestions || (run.uids || []).length || 0),
+                lastActivityAt: run.lastActivityAt || null,
+                expiresAt: run.expiresAt || null,
+                resumeRemaining: Math.max(0, Number(run.maxResumes || 0) - Number(run.resumeCount || 0)),
+            };
+        });
+
         const result = topics.map((t) => ({
             topic: t.topic,
-            sub_topics: t.sub_topics.map((st) => ({
-                subTopic: st.subTopic,
-                uid_count: st.uids.length,
-                hidden_uid_count: (st.hidden_uids || []).length,
-                uids: st.uids,
-                hidden_uids: st.hidden_uids,
-                video: st.video,
-                notes: st.notes,
-            })),
+            sub_topics: t.sub_topics.map((st) => {
+                const progress = progressMap[makeProgressKey(t.topic, st.subTopic)] || {
+                    hasTaken: false,
+                    attempts: 0,
+                    bestScore: 0,
+                    lastScore: 0,
+                    lastAttemptAt: null,
+                };
+                const activeRun = activeRunMap[makeProgressKey(t.topic, st.subTopic)] || null;
+
+                return {
+                    subTopic: st.subTopic,
+                    uid_count: st.uids.length,
+                    hidden_uid_count: (st.hidden_uids || []).length,
+                    uids: st.uids,
+                    hidden_uids: st.hidden_uids,
+                    video: st.video,
+                    notes: st.notes,
+                    progress: {
+                        hasTaken: Boolean(progress.hasTaken),
+                        attempts: Number(progress.attempts || 0),
+                        bestScore: Number(progress.bestScore || 0),
+                        lastScore: Number(progress.lastScore || 0),
+                        lastAttemptAt: progress.lastAttemptAt || null,
+                        completed: Number(progress.bestScore || 0) >= 60,
+                    },
+                    activeRun,
+                };
+            }),
         }));
 
         res.json({ success: true, chapterId, data: result });
@@ -116,9 +313,374 @@ exports.getSubTopics = async (req, res) => {
     }
 };
 
-// ── GET /api/v1/curriculum/questions ─────────────────────────────────────────
-// Query params: uids=10101,10102,... (comma-separated) | page=1 | limit=20
-// Fetches questions from ImportedQuestion by uid list (maintains uid order)
+exports.startCurriculumRun = async (req, res) => {
+    try {
+        const {
+            subject,
+            chapterId,
+            topic,
+            subTopic,
+            mode = 'practice',
+            uids = [],
+        } = req.body || {};
+
+        const normalizedSubject = String(subject || '').toLowerCase();
+        if (!VALID_SUBJECTS.includes(normalizedSubject)) {
+            return res.status(400).json({ success: false, error: `Invalid subject. Must be one of: ${VALID_SUBJECTS.join(', ')}` });
+        }
+
+        const normalizedChapterId = String(chapterId || '').trim();
+        const normalizedTopic = String(topic || '').trim();
+        const normalizedSubTopic = String(subTopic || '').trim();
+        const normalizedMode = mode === 'test' ? 'test' : 'practice';
+        const uidList = Array.isArray(uids) ? uids.map((u) => Number(u)).filter(Number.isFinite) : [];
+
+        if (!normalizedChapterId || !normalizedTopic || !normalizedSubTopic) {
+            return res.status(400).json({ success: false, error: 'chapterId, topic and subTopic are required' });
+        }
+        if (uidList.length === 0) {
+            return res.status(400).json({ success: false, error: 'uids are required to start a run' });
+        }
+
+        await expireStaleRuns(req.user.id);
+
+        let existing = await ImportedCurriculumQuizRun.findOne({
+            userId: req.user.id,
+            subject: normalizedSubject,
+            chapterId: normalizedChapterId,
+            topic: normalizedTopic,
+            subTopic: normalizedSubTopic,
+            mode: normalizedMode,
+            status: 'in_progress',
+        });
+
+        const now = nowUtc();
+        let resumed = false;
+
+        if (existing) {
+            if (normalizedMode === 'test' && Number(existing.attemptedQuestions || 0) > 0) {
+                if (Number(existing.resumeCount || 0) >= Number(existing.maxResumes || 0)) {
+                    existing.status = 'abandoned';
+                    existing.abandonedAt = now;
+                    existing.lastActivityAt = now;
+                    await existing.save();
+                    existing = null;
+                } else {
+                    existing.resumeCount = Number(existing.resumeCount || 0) + 1;
+                    existing.lastActivityAt = now;
+                    existing.expiresAt = addHours(now, RUN_EXPIRY_HOURS);
+                    await existing.save();
+                    resumed = true;
+                }
+            } else {
+                existing.lastActivityAt = now;
+                existing.expiresAt = addHours(now, RUN_EXPIRY_HOURS);
+                await existing.save();
+                resumed = Number(existing.attemptedQuestions || 0) > 0;
+            }
+        }
+
+        const totalQuestions = uidList.length;
+        let run = existing;
+        if (!run) {
+            run = await ImportedCurriculumQuizRun.create({
+                userId: req.user.id,
+                subject: normalizedSubject,
+                chapterId: normalizedChapterId,
+                topic: normalizedTopic,
+                subTopic: normalizedSubTopic,
+                mode: normalizedMode,
+                uids: uidList,
+                status: 'in_progress',
+                currentIndex: 0,
+                answers: sanitizeAnswers([], totalQuestions),
+                questionTimes: sanitizeTimes([], totalQuestions),
+                attemptedQuestions: 0,
+                elapsedSeconds: 0,
+                remainingSeconds: normalizedMode === 'test' ? totalQuestions * 90 : null,
+                resumeCount: 0,
+                maxResumes: normalizedMode === 'test' ? 1 : 999,
+                totalQuestions,
+                startedAt: now,
+                lastActivityAt: now,
+                expiresAt: addHours(now, RUN_EXPIRY_HOURS),
+            });
+        }
+
+        const questions = await getImportedQuestionsByUIDs(run.uids || []);
+        res.status(200).json({
+            success: true,
+            data: {
+                resumed,
+                run: serializeRun(run),
+                questions,
+            },
+        });
+    } catch (err) {
+        console.error('startCurriculumRun error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+exports.getCurriculumRun = async (req, res) => {
+    try {
+        await expireStaleRuns(req.user.id);
+        const run = await ImportedCurriculumQuizRun.findOne({
+            _id: req.params.runId,
+            userId: req.user.id,
+        });
+        if (!run) {
+            return res.status(404).json({ success: false, error: 'Run not found' });
+        }
+
+        const questions = await getImportedQuestionsByUIDs(run.uids || []);
+        res.status(200).json({
+            success: true,
+            data: {
+                run: serializeRun(run),
+                questions,
+            },
+        });
+    } catch (err) {
+        console.error('getCurriculumRun error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+exports.updateCurriculumRunProgress = async (req, res) => {
+    try {
+        await expireStaleRuns(req.user.id);
+        const run = await ImportedCurriculumQuizRun.findOne({
+            _id: req.params.runId,
+            userId: req.user.id,
+            status: 'in_progress',
+        });
+        if (!run) {
+            return res.status(404).json({ success: false, error: 'Active run not found' });
+        }
+
+        const total = Number(run.totalQuestions || (run.uids || []).length || 0);
+        if (total <= 0) {
+            return res.status(400).json({ success: false, error: 'Run has no questions' });
+        }
+
+        if (req.body.answers !== undefined) {
+            run.answers = sanitizeAnswers(req.body.answers, total);
+            run.attemptedQuestions = countAttempted(run.answers);
+        }
+        if (req.body.questionTimes !== undefined) {
+            run.questionTimes = sanitizeTimes(req.body.questionTimes, total);
+        }
+        if (req.body.currentIndex !== undefined) {
+            const idx = Number(req.body.currentIndex);
+            run.currentIndex = Number.isFinite(idx) ? Math.max(0, Math.min(total - 1, Math.floor(idx))) : run.currentIndex;
+        }
+        if (req.body.elapsedSeconds !== undefined) {
+            const elapsed = Number(req.body.elapsedSeconds);
+            run.elapsedSeconds = Number.isFinite(elapsed) && elapsed > 0 ? Math.floor(elapsed) : 0;
+        }
+        if (run.mode === 'test' && req.body.remainingSeconds !== undefined) {
+            const remaining = Number(req.body.remainingSeconds);
+            run.remainingSeconds = Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : run.remainingSeconds;
+        }
+
+        run.lastActivityAt = nowUtc();
+        run.expiresAt = addHours(run.lastActivityAt, RUN_EXPIRY_HOURS);
+        await run.save();
+
+        res.status(200).json({ success: true, data: { run: serializeRun(run) } });
+    } catch (err) {
+        console.error('updateCurriculumRunProgress error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+exports.abandonCurriculumRun = async (req, res) => {
+    try {
+        await expireStaleRuns(req.user.id);
+        const run = await ImportedCurriculumQuizRun.findOne({
+            _id: req.params.runId,
+            userId: req.user.id,
+            status: 'in_progress',
+        });
+        if (!run) {
+            return res.status(404).json({ success: false, error: 'Active run not found' });
+        }
+
+        run.status = 'abandoned';
+        run.abandonedAt = nowUtc();
+        run.lastActivityAt = nowUtc();
+        await run.save();
+
+        res.status(200).json({ success: true, data: { run: serializeRun(run) } });
+    } catch (err) {
+        console.error('abandonCurriculumRun error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+exports.submitCurriculumRun = async (req, res) => {
+    try {
+        await expireStaleRuns(req.user.id);
+        const run = await ImportedCurriculumQuizRun.findOne({
+            _id: req.params.runId,
+            userId: req.user.id,
+            status: 'in_progress',
+        });
+        if (!run) {
+            return res.status(404).json({ success: false, error: 'Active run not found' });
+        }
+
+        const total = Number(run.totalQuestions || (run.uids || []).length || 0);
+        if (total <= 0) {
+            return res.status(400).json({ success: false, error: 'Run has no questions' });
+        }
+
+        if (req.body.answers !== undefined) {
+            run.answers = sanitizeAnswers(req.body.answers, total);
+        }
+        if (req.body.questionTimes !== undefined) {
+            run.questionTimes = sanitizeTimes(req.body.questionTimes, total);
+        }
+        run.attemptedQuestions = countAttempted(run.answers);
+
+        if (req.body.elapsedSeconds !== undefined) {
+            const elapsed = Number(req.body.elapsedSeconds);
+            run.elapsedSeconds = Number.isFinite(elapsed) && elapsed > 0 ? Math.floor(elapsed) : run.elapsedSeconds;
+        }
+        if (run.mode === 'test' && req.body.remainingSeconds !== undefined) {
+            const remaining = Number(req.body.remainingSeconds);
+            run.remainingSeconds = Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : run.remainingSeconds;
+        }
+
+        const questions = await getImportedQuestionsByUIDs(run.uids || []);
+        const score = evaluateRunScore(questions, run.answers || []);
+
+        run.correctAnswers = score.correctAnswers;
+        run.totalQuestions = score.totalQuestions;
+        run.percentage = score.percentage;
+        run.status = 'submitted';
+        run.submittedAt = nowUtc();
+        run.lastActivityAt = nowUtc();
+        await run.save();
+
+        await ImportedSubtopicAttempt.create({
+            userId: req.user.id,
+            subject: run.subject,
+            chapterId: run.chapterId,
+            topic: run.topic,
+            subTopic: run.subTopic,
+            mode: run.mode,
+            totalQuestions: score.totalQuestions,
+            correctAnswers: score.correctAnswers,
+            percentage: score.percentage,
+            timeTaken: Number(run.elapsedSeconds || 0),
+            uids: run.uids || [],
+            attemptedAt: run.submittedAt,
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                run: serializeRun(run),
+                summary: {
+                    score: score.correctAnswers,
+                    total: score.totalQuestions,
+                    percentage: score.percentage,
+                    subject: run.subject,
+                    topic: run.subTopic,
+                    chapterLabel: run.chapterId,
+                    attemptedAt: run.submittedAt,
+                },
+            },
+        });
+    } catch (err) {
+        console.error('submitCurriculumRun error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+exports.trackSubTopicAttempt = async (req, res) => {
+    try {
+        const {
+            subject,
+            chapterId,
+            topic,
+            subTopic,
+            mode = 'practice',
+            totalQuestions,
+            correctAnswers,
+            timeTaken = 0,
+            uids = [],
+        } = req.body || {};
+
+        const normalizedSubject = String(subject || '').toLowerCase();
+        if (!VALID_SUBJECTS.includes(normalizedSubject)) {
+            return res.status(400).json({
+                success: false,
+                error: `Invalid subject. Must be one of: ${VALID_SUBJECTS.join(', ')}`,
+            });
+        }
+
+        const normalizedChapterId = String(chapterId || '').trim();
+        const normalizedTopic = String(topic || '').trim();
+        const normalizedSubTopic = String(subTopic || '').trim();
+        if (!normalizedChapterId || !normalizedTopic || !normalizedSubTopic) {
+            return res.status(400).json({
+                success: false,
+                error: 'chapterId, topic and subTopic are required',
+            });
+        }
+
+        const total = Number(totalQuestions);
+        const correct = Number(correctAnswers);
+        if (!Number.isFinite(total) || total < 1) {
+            return res.status(400).json({ success: false, error: 'totalQuestions must be >= 1' });
+        }
+
+        if (!Number.isFinite(correct) || correct < 0 || correct > total) {
+            return res.status(400).json({ success: false, error: 'correctAnswers must be between 0 and totalQuestions' });
+        }
+
+        const percentage = Math.round((correct / total) * 100);
+
+        const attempt = await ImportedSubtopicAttempt.create({
+            userId: req.user.id,
+            subject: normalizedSubject,
+            chapterId: normalizedChapterId,
+            topic: normalizedTopic,
+            subTopic: normalizedSubTopic,
+            mode: mode === 'test' ? 'test' : 'practice',
+            totalQuestions: total,
+            correctAnswers: correct,
+            percentage,
+            timeTaken: Math.max(0, Number(timeTaken) || 0),
+            uids: Array.isArray(uids) ? uids.map(Number).filter(Number.isFinite) : [],
+            attemptedAt: new Date(),
+        });
+
+        res.status(201).json({
+            success: true,
+            data: {
+                id: attempt._id,
+                subject: attempt.subject,
+                chapterId: attempt.chapterId,
+                topic: attempt.topic,
+                subTopic: attempt.subTopic,
+                mode: attempt.mode,
+                totalQuestions: attempt.totalQuestions,
+                correctAnswers: attempt.correctAnswers,
+                percentage: attempt.percentage,
+                attemptedAt: attempt.attemptedAt,
+                completed: attempt.percentage >= 60,
+            },
+        });
+    } catch (err) {
+        console.error('trackSubTopicAttempt error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
 exports.getQuestionsByUIDs = async (req, res) => {
     try {
         const { uids, page = 1, limit = 20 } = req.query;
@@ -127,7 +689,7 @@ exports.getQuestionsByUIDs = async (req, res) => {
             return res.status(400).json({ success: false, error: 'uids query param is required' });
         }
 
-        const uidList = uids
+        const uidList = String(uids)
             .split(',')
             .map((u) => u.trim())
             .filter(Boolean);
@@ -136,19 +698,15 @@ exports.getQuestionsByUIDs = async (req, res) => {
             return res.status(400).json({ success: false, error: 'No valid uids provided' });
         }
 
-        const pageNum = Math.max(1, parseInt(page));
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+        const pageNum = Math.max(1, parseInt(page, 10));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
         const skip = (pageNum - 1) * limitNum;
-
-        // Paginate over the uid list, then fetch
         const paginatedUIDs = uidList.slice(skip, skip + limitNum);
 
-        // Fetch from ImportedQuestion (questionId is stored as a String)
         const questions = await ImportedQuestion.find({
             questionId: { $in: paginatedUIDs.map(String) },
         }).lean();
 
-        // Restore original uid order
         const questionMap = {};
         questions.forEach((q) => { questionMap[q.questionId] = q; });
         const ordered = paginatedUIDs.map((uid) => questionMap[String(uid)] || null).filter(Boolean);
