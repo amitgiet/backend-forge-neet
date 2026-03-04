@@ -118,8 +118,9 @@ exports.login = async (req, res, next) => {
             });
         }
 
-        // Update last login
+        // Update last login and streak
         user.lastLoginAt = new Date();
+        user.updateStreak();
         await user.save({ validateBeforeSave: false });
 
         sendTokenResponse(user, 200, res);
@@ -680,6 +681,7 @@ exports.verifyOtpLogin = async (req, res, next) => {
         if (!user.isEmailVerified) user.isEmailVerified = true;
 
         user.lastLoginAt = new Date(); // Update login time
+        user.updateStreak(); // Update streak on login
         await user.save({ validateBeforeSave: false });
 
         // Login successful

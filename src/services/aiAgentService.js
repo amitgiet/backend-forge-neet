@@ -3,677 +3,447 @@ const AITools = require('./aiTools');
 const AIAnalysisService = require('./aiAnalysisService');
 const PROMPT_TEMPLATES = require('../config/promptTemplates');
 const DataSummaryService = require('./dataSummaryService');
-// AIUsage is optional telemetry to track prompt usage and tools called
 const AIUsage = require('../models/AIUsage');
 
+const DECLARATIONS = [
+  ['getLastQuiz', 'Get user recent quiz attempts with scores and topics', { limit: { type: 'number' } }],
+  ['getLastTest', 'Get user recent test attempts with detailed results', { limit: { type: 'number' } }],
+  ['getOverallAccuracy', 'Get user overall performance statistics and accuracy', {}],
+  ['getSubjectAccuracy', 'Get accuracy for a specific subject', { subject: { type: 'string' } }, ['subject']],
+  ['getChapterAccuracy', 'Get chapter accuracy in a subject', { subject: { type: 'string' }, chapter: { type: 'string' } }, ['subject', 'chapter']],
+  ['getAccuracyTrend', 'Get accuracy trend over time', { days: { type: 'number' } }],
+  ['getWeakTopics', 'Identify weak topics', { limit: { type: 'number' } }],
+  ['getWeakChapters', 'Get weak chapters', { subject: { type: 'string' } }],
+  ['getRecentlyWrong', 'Get recently wrong questions', { limit: { type: 'number' } }],
+  ['getRevisionDue', 'Get topics due for revision today', {}],
+  ['getRevisionOverdue', 'Get overdue revision topics', {}],
+  ['getMasteryProgress', 'Get mastery progress across L1-L7 levels', {}],
+  ['getStudyStreak', 'Get study streak info', {}],
+  ['getStudyInsights', 'Get comprehensive study insights', {}],
+  ['getNextBestAction', 'Get next best action', {}],
+  ['getLeaderboardPosition', 'Get leaderboard position', {}],
+  ['getMotivationalStats', 'Get gamification stats', {}],
+  ['getStudyHoursToday', 'Get study hours for today', {}],
+  ['getWeeklyProgress', 'Get weekly progress', {}],
+  ['getTestDetails', 'Get detailed breakdown of a test', { testId: { type: 'string' } }, ['testId']],
+  ['getQuizByDate', 'Get quiz attempts in date range', { startDate: { type: 'string' }, endDate: { type: 'string' } }, ['startDate', 'endDate']],
+  ['getMasteredTopics', 'Get mastered topics', {}],
+  ['getUpcomingRevisions', 'Get upcoming revisions', { days: { type: 'number' } }],
+  ['getSkippedQuestions', 'Get skipped questions', { limit: { type: 'number' } }],
+  ['getSlowQuestions', 'Get slow questions', { limit: { type: 'number' } }],
+  ['compareWithPeers', 'Compare user performance with peers', {}],
+  ['getTimeManagementTips', 'Get time management tips', {}],
+  ['getQuestionReview', 'Review specific quiz session', { sessionId: { type: 'string' } }, ['sessionId']],
+  ['getBenchmarkScore', 'Compare subject score with benchmark', { subject: { type: 'string' } }, ['subject']],
+  ['suggestQuizzes', 'Suggest quizzes for user request', { topic: { type: 'string' }, subject: { type: 'string' }, chapter: { type: 'number' }, limit: { type: 'number' } }],
+  ['getCurriculumProgressSummary', 'Get curriculum progress summary', { subject: { type: 'string' } }],
+  ['getCurriculumWeakSubtopics', 'Get weak curriculum subtopics', { limit: { type: 'number' }, subject: { type: 'string' } }],
+  ['getCurriculumResumeQueue', 'Get resumable curriculum runs', { limit: { type: 'number' } }],
+  ['getMockTestCompletionSummary', 'Get mock completion summary', { examType: { type: 'string' }, testType: { type: 'string' }, classCategory: { type: 'string' }, freeOnly: { type: 'boolean' } }],
+  ['getMockPendingTests', 'Get pending mock tests', { limit: { type: 'number' }, examType: { type: 'string' }, testType: { type: 'string' }, classCategory: { type: 'string' }, freeOnly: { type: 'boolean' } }],
+  ['getCombinedPerformanceTrend', 'Get combined trend across quiz/curriculum/tests', { days: { type: 'number' } }],
+  ['buildTodayActionPlan', 'Build prioritized study action plan for today', { timeBudgetMinutes: { type: 'number' }, maxTasks: { type: 'number' } }]
+];
+
 class AIAgentService {
-    constructor() {
-        this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        this.model = this.genAI.getGenerativeModel({
-            model: 'gemini-2.5-flash-lite',
-            tools: [{
-                functionDeclarations: this.getFunctionDeclarations()
-            }]
-        });
-    }
+  constructor() {
+    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    this.model = this.genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash-lite',
+      tools: [{ functionDeclarations: this.getFunctionDeclarations() }]
+    });
+    this.doubtModel = this.genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash-lite'
+    });
+  }
 
-    getFunctionDeclarations() {
-        return [
-            {
-                name: 'getLastQuiz',
-                description: 'Get user\'s recent quiz attempts with scores and topics',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        limit: { type: 'number', description: 'Number of quizzes to retrieve (default 5)' }
-                    }
-                }
-            },
-            {
-                name: 'getLastTest',
-                description: 'Get user\'s recent test attempts with detailed results',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        limit: { type: 'number', description: 'Number of tests to retrieve (default 3)' }
-                    }
-                }
-            },
-            {
-                name: 'getOverallAccuracy',
-                description: 'Get user\'s overall performance statistics and accuracy',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getSubjectAccuracy',
-                description: 'Get accuracy for a specific subject (physics, chemistry, biology)',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        subject: { type: 'string', description: 'Subject name: physics, chemistry, or biology' }
-                    },
-                    required: ['subject']
-                }
-            },
-            {
-                name: 'getChapterAccuracy',
-                description: 'Get accuracy for a specific chapter in a subject',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        subject: { type: 'string', description: 'Subject name' },
-                        chapter: { type: 'string', description: 'Chapter ID or name' }
-                    },
-                    required: ['subject', 'chapter']
-                }
-            },
-            {
-                name: 'getAccuracyTrend',
-                description: 'Get accuracy trend over time',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        days: { type: 'number', description: 'Number of days to analyze (default 7)' }
-                    }
-                }
-            },
-            {
-                name: 'getWeakTopics',
-                description: 'Identify user\'s weak topics that need improvement',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        limit: { type: 'number', description: 'Number of weak topics to retrieve (default 5)' }
-                    }
-                }
-            },
-            {
-                name: 'getWeakChapters',
-                description: 'Get weak chapters for a subject or all subjects',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        subject: { type: 'string', description: 'Optional subject filter' }
-                    }
-                }
-            },
-            {
-                name: 'getRecentlyWrong',
-                description: 'Get questions user answered incorrectly recently',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        limit: { type: 'number', description: 'Number of questions (default 10)' }
-                    }
-                }
-            },
-            {
-                name: 'getRevisionDue',
-                description: 'Get topics due for revision today',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getRevisionOverdue',
-                description: 'Get overdue revision topics',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getMasteryProgress',
-                description: 'Get user\'s mastery progress across L1-L7 levels',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getStudyStreak',
-                description: 'Get user\'s study streak information',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getStudyInsights',
-                description: 'Get comprehensive study insights and analytics',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getNextBestAction',
-                description: 'Get AI recommendation for what to study next',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getLeaderboardPosition',
-                description: 'Get user\'s rank and leaderboard position',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getMotivationalStats',
-                description: 'Get gamification stats like streaks, badges, XP',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getStudyHoursToday',
-                description: 'Get study time for today',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getWeeklyProgress',
-                description: 'Get weekly study goal progress',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getTestDetails',
-                description: 'Get detailed breakdown of a specific test',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        testId: { type: 'string', description: 'Test ID' }
-                    },
-                    required: ['testId']
-                }
-            },
-            {
-                name: 'getQuizByDate',
-                description: 'Get quiz attempts within a date range',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        startDate: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-                        endDate: { type: 'string', description: 'End date (YYYY-MM-DD)' }
-                    },
-                    required: ['startDate', 'endDate']
-                }
-            },
-            {
-                name: 'getMasteredTopics',
-                description: 'Get all topics at mastery level 7',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getUpcomingRevisions',
-                description: 'Get revisions scheduled for next N days',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        days: { type: 'number', description: 'Number of days ahead (default 7)' }
-                    }
-                }
-            },
-            {
-                name: 'getSkippedQuestions',
-                description: 'Get questions user skipped without answering',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        limit: { type: 'number', description: 'Number of questions (default 10)' }
-                    }
-                }
-            },
-            {
-                name: 'getSlowQuestions',
-                description: 'Get questions that took longest time to answer',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        limit: { type: 'number', description: 'Number of questions (default 10)' }
-                    }
-                }
-            },
-            {
-                name: 'compareWithPeers',
-                description: 'Compare user performance with peer average',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getTimeManagementTips',
-                description: 'Get tips to improve time management in tests',
-                parameters: { type: 'object', properties: {} }
-            },
-            {
-                name: 'getQuestionReview',
-                description: 'Review specific quiz session questions and answers',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        sessionId: { type: 'string', description: 'Session ID to review' }
-                    },
-                    required: ['sessionId']
-                }
-            },
-            {
-                name: 'getBenchmarkScore',
-                description: 'Compare user subject score with platform average',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        subject: { type: 'string', description: 'Subject name (physics, chemistry, biology)' }
-                    },
-                    required: ['subject']
-                }
-            },
-            {
-                name: 'suggestQuizzes',
-                description: 'Use ONLY when user explicitly asks for quiz suggestions (e.g., "suggest quiz", "recommend quiz", "give me quiz"). Do NOT use for general queries. Returns quiz suggestions based on saved quizzes and/or subject/chapter/topic filters. Subject is optional; topic-only requests are allowed.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        topic: { type: 'string', description: 'Optional: specific topic keyword(s) requested by user (e.g., "electrochemistry", "thermodynamics")' },
-                        subject: { type: 'string', description: 'Optional: physics, chemistry, biology, mathematics, or general. If user topic is not a NEET subject, omit subject and pass topic only.' },
-                        chapter: { type: 'number', description: 'Optional: chapter number (1, 2, 3, etc)' },
-                        limit: { type: 'number', description: 'Number of quizzes to suggest. Default is 1. Use the number user specifies if mentioned.' }
-                    }
-                }
-            }
+  getFunctionDeclarations() {
+    return DECLARATIONS.map(([name, description, properties, required]) => ({
+      name,
+      description,
+      parameters: { type: 'object', properties, ...(Array.isArray(required) && required.length > 0 ? { required } : {}) }
+    }));
+  }
+
+  withTimeout(promise, timeoutMs = 5000) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`Tool timeout after ${timeoutMs}ms`)), timeoutMs))
+    ]);
+  }
+
+  async executeTool(toolName, args, userId) {
+    const normalizedToolName = String(toolName || '').includes('_')
+      ? String(toolName).replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+      : String(toolName || '');
+    const map = {
+      getLastQuiz: () => AITools.getLastQuiz(userId, args.limit),
+      getLastTest: () => AITools.getLastTest(userId, args.limit),
+      getOverallAccuracy: () => AITools.getOverallAccuracy(userId),
+      getSubjectAccuracy: () => AITools.getSubjectAccuracy(userId, args.subject),
+      getChapterAccuracy: () => AITools.getChapterAccuracy(userId, args.subject, args.chapter),
+      getAccuracyTrend: () => AITools.getAccuracyTrend(userId, args.days),
+      getWeakTopics: () => AITools.getWeakTopics(userId, args.limit),
+      getWeakChapters: () => AITools.getWeakChapters(userId, args.subject),
+      getRecentlyWrong: () => AITools.getRecentlyWrong(userId, args.limit),
+      getRevisionDue: () => AITools.getRevisionDue(userId),
+      getRevisionOverdue: () => AITools.getRevisionOverdue(userId),
+      getMasteryProgress: () => AITools.getMasteryProgress(userId),
+      getStudyStreak: () => AITools.getStudyStreak(userId),
+      getStudyInsights: () => AITools.getStudyInsights(userId),
+      getNextBestAction: () => AITools.getNextBestAction(userId),
+      getLeaderboardPosition: () => AITools.getLeaderboardPosition(userId),
+      getMotivationalStats: () => AITools.getMotivationalStats(userId),
+      getStudyHoursToday: () => AITools.getStudyHoursToday(userId),
+      getWeeklyProgress: () => AITools.getWeeklyProgress(userId),
+      getTestDetails: () => AITools.getTestDetails(userId, args.testId),
+      getQuizByDate: () => AITools.getQuizByDate(userId, args.startDate, args.endDate),
+      getMasteredTopics: () => AITools.getMasteredTopics(userId),
+      getUpcomingRevisions: () => AITools.getUpcomingRevisions(userId, args.days),
+      getSkippedQuestions: () => AITools.getSkippedQuestions(userId, args.limit),
+      getSlowQuestions: () => AITools.getSlowQuestions(userId, args.limit),
+      compareWithPeers: () => AITools.compareWithPeers(userId),
+      getTimeManagementTips: () => AITools.getTimeManagementTips(userId),
+      getQuestionReview: () => AITools.getQuestionReview(userId, args.sessionId),
+      getBenchmarkScore: () => AITools.getBenchmarkScore(userId, args.subject),
+      suggestQuizzes: () => AITools.suggestQuizzes(userId, { topic: args.topic, subject: args.subject, chapter: args.chapter, limit: args.limit }),
+      getCurriculumProgressSummary: () => AITools.getCurriculumProgressSummary(userId, args.subject),
+      getCurriculumWeakSubtopics: () => AITools.getCurriculumWeakSubtopics(userId, args.limit, args.subject),
+      getCurriculumResumeQueue: () => AITools.getCurriculumResumeQueue(userId, args.limit),
+      getMockTestCompletionSummary: () => AITools.getMockTestCompletionSummary(userId, args || {}),
+      getMockPendingTests: () => AITools.getMockPendingTests(userId, args.limit, args || {}),
+      getCombinedPerformanceTrend: () => AITools.getCombinedPerformanceTrend(userId, args.days),
+      buildTodayActionPlan: () => AITools.buildTodayActionPlan(userId, args.timeBudgetMinutes, args.maxTasks)
+    };
+    if (!map[normalizedToolName]) throw new Error(`Unknown tool: ${toolName}`);
+    return this.withTimeout(map[normalizedToolName](), 5000);
+  }
+
+  detectDeterministicIntent(message) {
+    const msg = String(message || '').toLowerCase();
+    if (msg.includes('review my last quiz') || msg.includes('last quiz')) return 'last_quiz_review';
+    if (msg.includes('what should i do today') || msg.includes('what should i study today') || msg.includes('today plan') || msg.includes('plan my day')) return 'today_action_plan';
+    if (msg.includes('suggest') || msg.includes('recommend') || msg.includes('give me') || msg.includes('test me') || (msg.includes('quiz') && (msg.includes(' on ') || msg.includes(' for ')))) return 'quiz_suggestion';
+    return null;
+  }
+
+  extractQuizFilters(message) {
+    const msg = String(message || '');
+    const lower = msg.toLowerCase();
+    const subjects = ['physics', 'chemistry', 'biology', 'mathematics', 'maths', 'general'];
+    const subject = subjects.find((s) => lower.includes(s));
+    const chapterMatch = lower.match(/\b(chapter|ch)\s*(\d{1,2})\b/);
+    const chapter = chapterMatch ? Number.parseInt(chapterMatch[2], 10) : undefined;
+    const topicMatch = lower.match(/\bquiz\s+(on|for|about)\s+(.+)$/i);
+    let topic = topicMatch && topicMatch[2] ? String(topicMatch[2]).trim() : msg;
+    topic = topic.replace(/suggest|recommend|give me|quiz|practice|test me/gi, ' ').replace(/\s+/g, ' ').trim();
+    return { subject: subject === 'maths' ? 'mathematics' : subject, chapter, topic, limit: 1 };
+  }
+
+  parseInlinePayloads(text) {
+    const decodedText = String(text || '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&apos;/g, "'");
+    let cleanText = decodedText;
+    let chartData = null;
+    let quizData = null;
+    try {
+      const chartMatch = decodedText.match(/\{"type":"chart".*?\}/s);
+      if (chartMatch) {
+        chartData = JSON.parse(chartMatch[0]);
+        cleanText = cleanText.replace(chartMatch[0], '').trim();
+      }
+    } catch {}
+    try {
+      const quizMatch = decodedText.match(/\{"type":"quizzes"[^}]*"data":\[.*?\]\}/s);
+      if (quizMatch) {
+        quizData = JSON.parse(quizMatch[0]);
+        cleanText = cleanText.replace(quizMatch[0], '').trim();
+      }
+    } catch {}
+    return { cleanText, chartData, quizData };
+  }
+
+  buildUiPayload({ message, toolsUsed = [], dataSummary = null, actions = [] }) {
+    const { cleanText, chartData, quizData } = this.parseInlinePayloads(message);
+    const blocks = [];
+    if (cleanText) blocks.push({ type: 'markdown', data: { content: cleanText } });
+    if (chartData && chartData.data) blocks.push({ type: 'chart', data: chartData });
+    if (quizData && Array.isArray(quizData.data)) blocks.push({ type: 'quiz_suggestions', data: quizData.data });
+    if (actions.length > 0) blocks.push({ type: 'actions', data: { items: actions } });
+    return {
+      blocks,
+      actions,
+      dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+      toolsUsed,
+      dataAvailability: dataSummary?.dataAvailability || 'insufficient',
+      lastUpdatedAt: new Date().toISOString()
+    };
+  }
+
+  buildSystemPrompt({ mode = 'coach', userContext = '', chatSummary = '', summaryText = '', language = 'en' }) {
+    const template = mode === 'doubt'
+      ? (PROMPT_TEMPLATES.DOUBT_SYSTEM_PROMPT || PROMPT_TEMPLATES.COACH_SYSTEM_PROMPT || PROMPT_TEMPLATES.MASTER_SYSTEM_PROMPT || '')
+      : (mode === 'coach'
+        ? (PROMPT_TEMPLATES.COACH_SYSTEM_PROMPT || PROMPT_TEMPLATES.MASTER_SYSTEM_PROMPT || '')
+        : (PROMPT_TEMPLATES.MASTER_SYSTEM_PROMPT || ''));
+    const memoryBlock = chatSummary && String(chatSummary).trim().length > 0 ? `\n\nChat memory (rolling summary):\n${String(chatSummary).trim()}\n` : '';
+    const langLine = language === 'hi' ? 'Respond in Hindi first, and keep key terms bilingual (Hindi + English).' : 'Respond in English.';
+    return template
+      .replace('{STUDENT_CONTEXT}', userContext)
+      .replace('{CHAT_MEMORY}', memoryBlock)
+      .replace('{SUMMARY_TEXT}', summaryText || 'No data available')
+      .replace('{RESPONSE_LANGUAGE}', langLine)
+      + `\nCurrent date: ${new Date().toISOString().slice(0, 10)}`;
+  }
+
+  async persistUsage(payload) {
+    try {
+      await AIUsage.create(payload);
+    } catch (e) {
+      console.warn('Failed to persist AIUsage:', e && e.message);
+    }
+  }
+
+  async chat(userId, message, chatHistory = [], chatSummary = '', options = {}) {
+    const startedAt = Date.now();
+    const mode = ['coach', 'analysis', 'doubt'].includes(String(options?.mode || '').toLowerCase())
+      ? String(options.mode).toLowerCase()
+      : 'coach';
+    const clientContext = options?.clientContext || {};
+    const userDoc = options?.user || null;
+    const language = (clientContext.preferredLanguage || userDoc?.profile?.preferredLanguage || 'en') === 'hi' ? 'hi' : 'en';
+
+    let dataSummary = null;
+    let toolsUsed = [];
+    const toolErrors = [];
+
+    try {
+      dataSummary = await DataSummaryService.generateMasterSummary(userId);
+      const intent = this.detectDeterministicIntent(message);
+
+      if (intent === 'today_action_plan') {
+        const plan = await AITools.buildTodayActionPlan(userId, 90, 3);
+        toolsUsed.push('buildTodayActionPlan');
+        const actions = (plan.tasks || []).map((task) => ({
+          id: String(task.id),
+          label: String(task.title || 'Open'),
+          actionType: String(task.actionType || 'none'),
+          payload: task.payload || {}
+        }));
+        const lines = [
+          '## Today Plan',
+          '',
+          `Time budget: **${plan.timeBudgetMinutes} min**`,
+          '',
+          ...(plan.tasks || []).map((task, idx) => `${idx + 1}. **${task.title}** (${task.durationMinutes} min)\n- ${task.reason}`)
         ];
-    }
-
-    async executeTool(toolName, args, userId) {
-        const originalToolName = String(toolName || '').trim();
-        const normalizedToolName = originalToolName.includes('_')
-            ? originalToolName.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
-            : originalToolName;
-
-        const toolMap = {
-            getLastQuiz: () => AITools.getLastQuiz(userId, args.limit),
-            getLastTest: () => AITools.getLastTest(userId, args.limit),
-            getOverallAccuracy: () => AITools.getOverallAccuracy(userId),
-            getSubjectAccuracy: () => AITools.getSubjectAccuracy(userId, args.subject),
-            getChapterAccuracy: () => AITools.getChapterAccuracy(userId, args.subject, args.chapter),
-            getAccuracyTrend: () => AITools.getAccuracyTrend(userId, args.days),
-            getWeakTopics: () => AITools.getWeakTopics(userId, args.limit),
-            getWeakChapters: () => AITools.getWeakChapters(userId, args.subject),
-            getRecentlyWrong: () => AITools.getRecentlyWrong(userId, args.limit),
-            getRevisionDue: () => AITools.getRevisionDue(userId),
-            getRevisionOverdue: () => AITools.getRevisionOverdue(userId),
-            getMasteryProgress: () => AITools.getMasteryProgress(userId),
-            getStudyStreak: () => AITools.getStudyStreak(userId),
-            getStudyInsights: () => AITools.getStudyInsights(userId),
-            getNextBestAction: () => AITools.getNextBestAction(userId),
-            getLeaderboardPosition: () => AITools.getLeaderboardPosition(userId),
-            getMotivationalStats: () => AITools.getMotivationalStats(userId),
-            getStudyHoursToday: () => AITools.getStudyHoursToday(userId),
-            getWeeklyProgress: () => AITools.getWeeklyProgress(userId),
-            getTestDetails: () => AITools.getTestDetails(userId, args.testId),
-            getQuizByDate: () => AITools.getQuizByDate(userId, args.startDate, args.endDate),
-            getMasteredTopics: () => AITools.getMasteredTopics(userId),
-            getUpcomingRevisions: () => AITools.getUpcomingRevisions(userId, args.days),
-            getSkippedQuestions: () => AITools.getSkippedQuestions(userId, args.limit),
-            getSlowQuestions: () => AITools.getSlowQuestions(userId, args.limit),
-            compareWithPeers: () => AITools.compareWithPeers(userId),
-            getTimeManagementTips: () => AITools.getTimeManagementTips(userId),
-            getQuestionReview: () => AITools.getQuestionReview(userId, args.sessionId),
-            getBenchmarkScore: () => AITools.getBenchmarkScore(userId, args.subject),
-            suggestQuizzes: () => AITools.suggestQuizzes(userId, { topic: args.topic, subject: args.subject, chapter: args.chapter, limit: args.limit })
+        const messageText = lines.join('\n');
+        return {
+          message: messageText,
+          toolsUsed,
+          dataAvailability: dataSummary?.dataAvailability || 'partial',
+          dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+          ui: this.buildUiPayload({ message: messageText, toolsUsed, dataSummary, actions })
         };
+      }
 
-        if (!toolMap[normalizedToolName]) {
-            throw new Error(`Unknown tool: ${originalToolName}`);
-        }
+      if (intent === 'quiz_suggestion') {
+        const suggestions = await AITools.suggestQuizzes(userId, this.extractQuizFilters(message));
+        toolsUsed.push('suggestQuizzes');
+        const data = (Array.isArray(suggestions) ? suggestions : []).map((s) => ({
+          quizId: s.quizId ? String(s.quizId) : undefined,
+          lineId: s.lineId ? String(s.lineId) : undefined,
+          topic: s.topic,
+          subject: s.subject,
+          chapter: String(s.chapter ?? ''),
+          reason: s.reason
+        }));
+        const messageText = `Here are some quizzes for you:\n${JSON.stringify({ type: 'quizzes', data })}`;
+        const actions = data.map((item, idx) => ({
+          id: `quiz-${idx + 1}`,
+          label: `Take Quiz: ${item.topic}`,
+          actionType: 'take_quiz',
+          payload: item
+        }));
+        return {
+          message: messageText,
+          toolsUsed,
+          dataAvailability: dataSummary?.dataAvailability || 'partial',
+          dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+          ui: this.buildUiPayload({ message: messageText, toolsUsed, dataSummary, actions })
+        };
+      }
 
-        return await toolMap[normalizedToolName]();
-    }
+      if (intent === 'last_quiz_review') {
+        let summary = null;
+        if (typeof AITools.getLastQuizDetailed === 'function') {
+          try {
+            summary = await AITools.getLastQuizDetailed(userId);
+            toolsUsed.push('getLastQuizDetailed');
+          } catch {
+            toolErrors.push('getLastQuizDetailed failed');
+          }
+        }
+        if (!summary) {
+          const last = await AITools.getLastQuiz(userId, 1);
+          toolsUsed.push('getLastQuiz');
+          if (!Array.isArray(last) || last.length === 0) {
+            const noData = 'No data available for your last quiz yet.';
+            return {
+              message: noData,
+              toolsUsed,
+              dataAvailability: dataSummary?.dataAvailability || 'insufficient',
+              dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+              ui: this.buildUiPayload({ message: noData, toolsUsed, dataSummary })
+            };
+          }
+          const q = last[0];
+          summary = { meta: { quizId: q.quizId, subject: q.subject, topic: q.topic, chapterId: q.chapterId, date: q.date, score: q.correct, total: q.total, percentage: q.accuracy, timeTaken: q.timeTaken } };
+        }
+        const analysisMarkdown = await AIAnalysisService.analyzeLastQuizPerformance(summary);
+        const messageText = `## Last quiz summary\n\n${typeof analysisMarkdown === 'string' && analysisMarkdown.trim().length > 0 ? analysisMarkdown : 'No analysis available for your last quiz yet.'}`;
+        return {
+          message: messageText,
+          toolsUsed,
+          dataAvailability: dataSummary?.dataAvailability || 'partial',
+          dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+          ui: this.buildUiPayload({ message: messageText, toolsUsed, dataSummary })
+        };
+      }
 
-    classifyIntent(message) {
-        const msg = message.toLowerCase();
-        
-        // Last quiz review (must be checked before generic "quiz" detection)
-        if (
-            msg.includes('review my last quiz') ||
-            msg.includes('review last quiz') ||
-            msg.includes('my last quiz') ||
-            msg.includes('last quiz')
-        ) {
-            return { type: 'last_quiz_review', confidence: 'high' };
-        }
+      if (mode === 'doubt') {
+        const normalizedHistory = Array.isArray(chatHistory) ? [...chatHistory].slice(-8) : [];
+        const historyText = normalizedHistory
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content || '')}`)
+          .join('\n');
 
-        // Quiz suggestions
-        // Only treat as suggestions when user is asking to be given a quiz.
-        if (
-            msg.includes('suggest') ||
-            msg.includes('recommend') ||
-            msg.includes('give me') ||
-            msg.includes('test me') ||
-            (msg.includes('quiz') && (msg.includes('on ') || msg.includes('for ') || msg.includes('quiz on') || msg.includes('quiz for')))
-        ) {
-            return { type: 'quiz_suggestion', confidence: 'high' };
-        }
-        
-        // Performance stats
-        if (msg.includes('accuracy') || msg.includes('score') || msg.includes('performance') || 
-            msg.includes('how am i') || msg.includes('how did i')) {
-            return { type: 'performance_stats', confidence: 'high' };
-        }
-        
-        // Weak areas
-        if (msg.includes('weak') || msg.includes('struggle') || msg.includes('difficult') || 
-            msg.includes('improve') || msg.includes('need help')) {
-            return { type: 'weak_areas', confidence: 'high' };
-        }
-        
-        // Revision
-        if (msg.includes('revision') || msg.includes('review') || msg.includes('revise')) {
-            return { type: 'revision', confidence: 'high' };
-        }
-        
-        // Study plan
-        if (msg.includes('study') || msg.includes('plan') || msg.includes('schedule') || 
-            msg.includes('what should i') || msg.includes('what to')) {
-            return { type: 'study_plan', confidence: 'medium' };
-        }
-        
-        return { type: 'general', confidence: 'low' };
-    }
+        const systemPrompt = this.buildSystemPrompt({
+          mode,
+          userContext: '',
+          chatSummary,
+          summaryText: '',
+          language
+        });
 
-    detectDeterministicIntent(message) {
-        const msg = String(message || '').toLowerCase();
-
-        // Hard-guard: "review last quiz" should never route to suggestions.
-        if (
-            msg.includes('review my last quiz') ||
-            msg.includes('review last quiz') ||
-            msg.includes('my last quiz') ||
-            msg.includes('last quiz')
-        ) {
-            return { type: 'last_quiz_review', confidence: 'high' };
-        }
-
-        // Hard-guard: only when user is clearly asking to be given a quiz.
-        if (
-            msg.includes('suggest') ||
-            msg.includes('recommend') ||
-            msg.includes('give me') ||
-            msg.includes('test me') ||
-            (msg.includes('quiz') && (msg.includes('quiz on') || msg.includes('quiz for') || msg.includes(' on ') || msg.includes(' for ')))
-        ) {
-            return { type: 'quiz_suggestion', confidence: 'high' };
-        }
-
-        return null;
-    }
-
-    async classifyIntentWithAI(message) {
-        const prompt = [
-            'You classify a student message into ONE intent.',
-            'Return ONLY valid JSON with exactly: {"type":"...","confidence":"high|medium|low"}',
-            '',
-            'Allowed types:',
-            '- last_quiz_review (ONLY if user asks to review last quiz / last attempt / last session)',
-            '- quiz_suggestion (ONLY if user asks to be given a quiz, e.g. "give me a quiz on X")',
-            '- performance_stats',
-            '- weak_areas',
-            '- revision',
-            '- study_plan',
-            '- general',
-            '',
-            'Important:',
-            '- If message contains "last quiz", prefer last_quiz_review.',
-            '- If message mentions "quiz" but is not asking to be given one, do NOT choose quiz_suggestion.',
-            '',
-            `Message: "${String(message || '').replace(/\s+/g, ' ').trim()}"`
+        const doubtPrompt = [
+          systemPrompt,
+          '',
+          historyText ? `Recent chat context:\n${historyText}` : '',
+          '',
+          `Student question: ${String(message || '').trim()}`,
+          '',
+          'Return only the answer content in markdown.'
         ].join('\n');
 
-        try {
-            const GeminiService = require('./geminiService');
-            const raw = await GeminiService.generateText(prompt, { maxRetries: 2 });
-            const cleaned = String(raw || '')
-                .replace(/```json\s*/gi, '')
-                .replace(/```/g, '')
-                .trim();
+        const result = await this.doubtModel.generateContent(doubtPrompt);
+        const doubtText = result?.response?.text?.();
+        const messageText = (typeof doubtText === 'string' && doubtText.trim().length > 0)
+          ? doubtText.trim()
+          : 'I could not process that doubt clearly. Please ask again in one line.';
 
-            const parsed = JSON.parse(cleaned);
-            const type = typeof parsed?.type === 'string' ? parsed.type.trim() : '';
-            const confidence = typeof parsed?.confidence === 'string' ? parsed.confidence.trim().toLowerCase() : 'low';
+        const payload = {
+          message: messageText,
+          toolsUsed,
+          dataAvailability: dataSummary?.dataAvailability || 'partial',
+          dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+          ui: this.buildUiPayload({ message: messageText, toolsUsed, dataSummary })
+        };
 
-            const allowedTypes = new Set(['last_quiz_review', 'quiz_suggestion', 'performance_stats', 'weak_areas', 'revision', 'study_plan', 'general']);
-            if (!allowedTypes.has(type)) return null;
-            if (!['high', 'medium', 'low'].includes(confidence)) return null;
+        await this.persistUsage({
+          userId,
+          model: 'gemini-2.5-flash-lite',
+          promptType: 'doubt_mode',
+          latencyMs: Date.now() - startedAt,
+          dataAvailability: payload.dataAvailability,
+          toolErrors,
+          meta: { mode, route: clientContext?.route || null }
+        });
 
-            return { type, confidence };
-        } catch (e) {
-            return null;
+        return payload;
+      }
+
+      if (!dataSummary.isSufficient) {
+        const fallback = 'No sufficient performance data available to generate analysis.';
+        return {
+          message: fallback,
+          toolsUsed,
+          dataAvailability: dataSummary?.dataAvailability || 'insufficient',
+          dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+          ui: this.buildUiPayload({ message: fallback, toolsUsed, dataSummary })
+        };
+      }
+
+      const User = require('../models/User');
+      const user = userDoc || await User.findById(userId).lean();
+      const userContext = user
+        ? `Student Profile:\n- Name: ${user.name}\n- Target Exam: ${user.targetExam || 'NEET'}\n- Target Year: ${user.targetYear || 'Not set'}\n- Current Class: ${user.currentClass || 'Not set'}\n- Study Hours Goal: ${user.analytics?.weeklyGoalHours || 42} hours/week\n- Current Level: ${user.gamification?.level || 1}\n- Total XP: ${user.gamification?.totalXP || 0}`
+        : '';
+      const normalizedHistory = Array.isArray(chatHistory) ? [...chatHistory] : [];
+      while (normalizedHistory.length > 0 && normalizedHistory[0].role !== 'user') normalizedHistory.shift();
+
+      const chat = this.model.startChat({
+        history: normalizedHistory.map((msg) => ({ role: msg.role, parts: [{ text: msg.content }] })),
+        generationConfig: { temperature: mode === 'coach' ? 0.25 : 0.35, maxOutputTokens: 1200 }
+      });
+      const systemPrompt = this.buildSystemPrompt({ mode, userContext, chatSummary, summaryText: dataSummary.summaryText, language });
+      let result = await chat.sendMessage(systemPrompt + '\n\nStudent: ' + message);
+      let response = result.response;
+      let iterations = 0;
+
+      while (response.functionCalls() && iterations < 5) {
+        iterations += 1;
+        const functionResponses = [];
+        for (const call of response.functionCalls()) {
+          toolsUsed.push(call.name);
+          try {
+            const toolResult = await this.executeTool(call.name, call.args || {}, userId);
+            functionResponses.push({ functionResponse: { name: call.name, response: { status: 'success', data: toolResult } } });
+          } catch (toolError) {
+            const msg = String(toolError?.message || 'Tool failed');
+            toolErrors.push(`${call.name}: ${msg}`);
+            functionResponses.push({ functionResponse: { name: call.name, response: { status: 'error', error: msg, data: null } } });
+          }
         }
+        result = await chat.sendMessage(functionResponses);
+        response = result.response;
+      }
+
+      const responseText = response?.text ? response.text() : '';
+      const finalMessage = responseText && responseText.trim().length > 0
+        ? responseText
+        : 'I retrieved your data but encountered an issue generating a response. Please try asking in a different way.';
+      toolsUsed = Array.from(new Set(toolsUsed.filter(Boolean)));
+
+      await this.persistUsage({
+        userId,
+        model: this.model ? (this.model.model || 'gemini-2.5-flash-lite') : 'gemini-2.5-flash-lite',
+        promptType: mode === 'coach' ? 'coach_mode' : (mode === 'analysis' ? 'analysis_mode' : 'master_injected'),
+        latencyMs: Date.now() - startedAt,
+        dataAvailability: dataSummary?.dataAvailability || 'unknown',
+        toolErrors,
+        meta: { mode, route: clientContext?.route || null, toolsUsed, dataSourcesUsed: dataSummary?.dataSourcesUsed || [] }
+      });
+
+      return {
+        message: finalMessage,
+        toolsUsed,
+        dataAvailability: dataSummary?.dataAvailability || 'partial',
+        dataSourcesUsed: dataSummary?.dataSourcesUsed || [],
+        ui: this.buildUiPayload({ message: finalMessage, toolsUsed, dataSummary })
+      };
+    } catch (error) {
+      await this.persistUsage({
+        userId,
+        model: 'gemini-2.5-flash-lite',
+        promptType: 'error',
+        latencyMs: Date.now() - startedAt,
+        dataAvailability: dataSummary?.dataAvailability || 'unknown',
+        toolErrors: [...toolErrors, String(error?.message || 'AI agent error')],
+        meta: { mode }
+      });
+      console.error('AI Agent Error:', error);
+      throw new Error('Failed to process your request. Please try again.');
     }
-
-    validateResponseJSON(text) {
-        // Don't validate - let frontend handle it
-        // This prevents false positives from aggressive regex
-        return text;
-    }
-
-    extractQuizFilters(message) {
-        const msg = String(message || '');
-        const lower = msg.toLowerCase();
-
-        const subjectCandidates = ['physics', 'chemistry', 'biology', 'mathematics', 'maths', 'general'];
-        let subject = undefined;
-        for (const s of subjectCandidates) {
-            if (lower.includes(s)) {
-                subject = s === 'maths' ? 'mathematics' : s;
-                break;
-            }
-        }
-
-        let chapter = undefined;
-        const chapterMatch = lower.match(/\b(chapter|ch)\s*(\d{1,2})\b/);
-        if (chapterMatch) {
-            chapter = Number.parseInt(chapterMatch[2], 10);
-        }
-
-        // Strong topic extraction: prefer “quiz on/for/about <topic>”
-        let topic = '';
-        const topicMatch = lower.match(/\bquiz\s+(on|for|about)\s+(.+)$/i);
-        if (topicMatch && topicMatch[2]) {
-            topic = String(topicMatch[2]).trim();
-        }
-
-        // Remove common instruction words and detected subject/chapter
-        if (!topic) topic = msg;
-
-        topic = topic
-            .replace(/\bgive me\b/gi, ' ')
-            .replace(/\bcan you\b/gi, ' ')
-            .replace(/\bplease\b/gi, ' ')
-            .replace(/suggest|recommend|give|make|create/gi, ' ')
-            .replace(/quiz|quizzes|practice|test me/gi, ' ')
-            .replace(/\b(chapter|ch)\s*\d{1,2}\b/gi, ' ')
-            .replace(/\b(physics|chemistry|biology|mathematics|maths|general)\b/gi, ' ')
-            .replace(/\bme\b/gi, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        if (!topic) topic = msg.trim();
-
-        // If user didn’t specify subject explicitly, infer from topic
-        return { subject, chapter, topic, limit: 1 };
-    }
-
-    async chat(userId, message, chatHistory = [], chatSummary = '') {
-        try {
-            // Production routing:
-            // - Deterministic for sensitive flows (quiz suggestions + last quiz review)
-            // - AI classifier for everything else
-            // - Static fallback if AI fails
-            const deterministic = this.detectDeterministicIntent(message);
-            const aiIntent = deterministic ? null : await this.classifyIntentWithAI(message);
-            const intent = deterministic || aiIntent || this.classifyIntent(message);
-            console.log(`Intent detected: ${intent.type} (${intent.confidence})`);
-
-            // Deterministic quiz suggestions: never let model invent/truncate IDs.
-            if (intent.type === 'quiz_suggestion') {
-                const filters = this.extractQuizFilters(message);
-                const suggestions = await AITools.suggestQuizzes(userId, filters);
-                const data = (Array.isArray(suggestions) ? suggestions : []).map((s) => ({
-                    quizId: s.quizId ? String(s.quizId) : undefined,
-                    lineId: s.lineId ? String(s.lineId) : undefined,
-                    topic: s.topic,
-                    subject: s.subject,
-                    chapter: String(s.chapter ?? '')
-                }));
-
-                return {
-                    message: `Here are some quizzes for you:\n${JSON.stringify({ type: 'quizzes', data })}`
-                };
-            }
-
-            // Deterministic last quiz review (so it doesn't route to suggestQuizzes)
-            if (intent.type === 'last_quiz_review') {
-                let summary = null;
-                // Prefer detailed last-quiz summary when available.
-                if (typeof AITools.getLastQuizDetailed === 'function') {
-                    try {
-                        summary = await AITools.getLastQuizDetailed(userId);
-                    } catch (e) {
-                        console.error('getLastQuizDetailed failed, falling back to simple last quiz:', e);
-                    }
-                }
-
-                // Fallback to simple aggregate last quiz if detailed summary is not available.
-                if (!summary) {
-                    const last = await AITools.getLastQuiz(userId, 1);
-                    if (!Array.isArray(last) || last.length === 0) {
-                        return { message: "No data available for your last quiz yet." };
-                    }
-                    const q = last[0];
-                    summary = {
-                        meta: {
-                            quizId: q.quizId,
-                            subject: q.subject,
-                            topic: q.topic,
-                            chapterId: q.chapterId,
-                            date: q.date,
-                            score: q.correct,
-                            total: q.total,
-                            percentage: q.accuracy,
-                            timeTaken: q.timeTaken
-                        }
-                    };
-                }
-
-                const analysisMarkdown = await AIAnalysisService.analyzeLastQuizPerformance(summary);
-                const header = '## Last quiz summary\n\n';
-                const body =
-                    typeof analysisMarkdown === 'string' && analysisMarkdown.trim().length > 0
-                        ? analysisMarkdown
-                        : 'No analysis available for your last quiz yet.';
-
-                return { message: header + body };
-            }
-            
-            // Get user profile for context
-            const User = require('../models/User');
-            const user = await User.findById(userId).lean();
-            
-            const userContext = user ? `Student Profile:\n- Name: ${user.name}\n- Target Exam: ${user.targetExam || 'NEET'}\n- Target Year: ${user.targetYear || 'Not set'}\n- Current Class: ${user.currentClass || 'Not set'}\n- Study Hours Goal: ${user.analytics?.weeklyGoalHours || 42} hours/week\n- Current Level: ${user.gamification?.level || 1}\n- Total XP: ${user.gamification?.totalXP || 0}` : '';
-
-            // Gemini requires history to start with a user role.
-            const normalizedHistory = Array.isArray(chatHistory) ? [...chatHistory] : [];
-            while (normalizedHistory.length > 0 && normalizedHistory[0].role !== 'user') {
-                normalizedHistory.shift();
-            }
-
-            const chat = this.model.startChat({
-                history: normalizedHistory.map(msg => ({
-                    role: msg.role,
-                    parts: [{ text: msg.content }]
-                })),
-                generationConfig: {
-                    temperature: 0.3,
-                    maxOutputTokens: 1200
-                }
-            });
-
-            const memoryBlock = chatSummary && String(chatSummary).trim().length > 0
-                ? `\n\nChat memory (rolling summary):\n${String(chatSummary).trim()}\n`
-                : '';
-
-            // Build a compact, DB-driven summary to inject into the system prompt.
-            const dataSummary = await DataSummaryService.generateMasterSummary(userId);
-
-            // Short-circuit if not enough data to perform reliable analysis.
-            // Use exact deterministic message required by product spec when data insufficient.
-            if (!dataSummary.isSufficient) {
-                return {
-                    message: "No sufficient performance data available to generate analysis."
-                };
-            }
-
-            const template = PROMPT_TEMPLATES.MASTER_SYSTEM_PROMPT || '';
-            const populated = template
-                .replace('{STUDENT_CONTEXT}', userContext)
-                .replace('{CHAT_MEMORY}', memoryBlock)
-                .replace('{SUMMARY_TEXT}', dataSummary.summaryText || 'No data available')
-                + `\nCurrent date: ${new Date().toLocaleDateString()}`;
-
-            let result = await chat.sendMessage(populated + '\n\nStudent: ' + message);
-            let response = result.response;
-
-            const maxIterations = 5;
-            let iterations = 0;
-            let toolsUsedList = [];
-
-            while (response.functionCalls() && iterations < maxIterations) {
-                iterations++;
-                const functionCalls = response.functionCalls();
-                const functionResponses = [];
-
-                for (const call of functionCalls) {
-                    console.log(`Executing tool: ${call.name}`, call.args);
-                    toolsUsedList.push(call.name);
-                    const toolResult = await this.executeTool(call.name, call.args || {}, userId);
-                    console.log(`Tool result:`, JSON.stringify(toolResult).substring(0, 200));
-                    
-                    // Wrap tool result with metadata
-                    const wrappedResult = {
-                        status: 'success',
-                        data: toolResult,
-                        meta: {
-                            recordCount: Array.isArray(toolResult) ? toolResult.length : (toolResult ? 1 : 0),
-                            isEmpty: !toolResult || (Array.isArray(toolResult) && toolResult.length === 0)
-                        }
-                    };
-                    
-                    functionResponses.push({
-                        functionResponse: {
-                            name: call.name,
-                            response: wrappedResult
-                        }
-                    });
-                }
-
-                result = await chat.sendMessage(functionResponses);
-                response = result.response;
-                console.log('Response after tool:', response.text()?.substring(0, 100));
-            }
-
-            const responseText = response.text();
-            console.log('Final response text:', responseText);
-            
-            if (!responseText || responseText.trim().length === 0) {
-                return {
-                    message: 'I retrieved your data but encountered an issue generating a response. Please try asking in a different way.'
-                };
-            }
-
-            // Validate JSON formats before sending
-            const validatedResponse = this.validateResponseJSON(responseText);
-
-            // Record a lightweight AI usage event (best-effort)
-            try {
-                await AIUsage.create({
-                    userId,
-                    model: this.model ? (this.model.model || 'gemini-2.5-flash-lite') : 'gemini-2.5-flash-lite',
-                    promptType: 'master_injected',
-                    meta: { toolsUsed: toolsUsedList }
-                });
-            } catch (e) {
-                console.warn('Failed to persist AIUsage:', e && e.message);
-            }
-
-            return {
-                message: validatedResponse
-            };
-
-        } catch (error) {
-            console.error('AI Agent Error:', error);
-            throw new Error('Failed to process your request. Please try again.');
-        }
-    }
+  }
 }
 
 module.exports = AIAgentService;

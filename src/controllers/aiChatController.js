@@ -1,6 +1,7 @@
 const AIAgentService = require('../services/aiAgentService');
 const Chat = require('../models/Chat');
 const ChatSummaryService = require('../services/chatSummaryService');
+const AIUsage = require('../models/AIUsage');
 
 const aiAgent = new AIAgentService();
 
@@ -9,7 +10,7 @@ const aiAgent = new AIAgentService();
 // @access  Private
 exports.sendMessage = async (req, res) => {
     try {
-        const { message, chatId } = req.body;
+        const { message, chatId, mode = 'coach', clientContext = {} } = req.body;
         const userId = req.user._id;
 
         if (!message || message.trim().length === 0) {
@@ -37,7 +38,11 @@ exports.sendMessage = async (req, res) => {
         }
 
         // Get AI response
-        const aiResponse = await aiAgent.chat(userId, message, chatHistory, chat?.summary || '');
+        const aiResponse = await aiAgent.chat(userId, message, chatHistory, chat?.summary || '', {
+            mode,
+            clientContext,
+            user: req.user
+        });
 
         // Validate AI response
         if (!aiResponse || !aiResponse.message || aiResponse.message.trim().length === 0) {
@@ -86,7 +91,11 @@ exports.sendMessage = async (req, res) => {
             success: true,
             data: {
                 chatId: chat._id,
-                message: aiResponse.message
+                message: aiResponse.message,
+                ui: aiResponse.ui || null,
+                toolsUsed: aiResponse.toolsUsed || [],
+                dataSourcesUsed: aiResponse.dataSourcesUsed || [],
+                dataAvailability: aiResponse.dataAvailability || 'insufficient'
             }
         });
 
@@ -165,7 +174,7 @@ exports.deleteChat = async (req, res) => {
         const userId = req.user._id;
         const { chatId } = req.params;
 
-        const chat = await Chat.findOneAndDelete({ _id: chatId, userId });
+        const chat = await Chat.findOneAndDelete({ _id: chatId, participants: userId });
 
         if (!chat) {
             return res.status(404).json({ success: false, message: 'Chat not found' });
@@ -176,5 +185,44 @@ exports.deleteChat = async (req, res) => {
     } catch (error) {
         console.error('Delete chat error:', error);
         res.status(500).json({ success: false, message: 'Failed to delete chat' });
+    }
+};
+
+// @desc    Capture user feedback on AI response quality
+// @route   POST /api/ai-chat/feedback
+// @access  Private
+exports.submitFeedback = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const { chatId, messageIndex, rating, reason } = req.body || {};
+
+        if (!chatId) {
+            return res.status(400).json({ success: false, message: 'chatId is required' });
+        }
+        if (!['up', 'down'].includes(String(rating || ''))) {
+            return res.status(400).json({ success: false, message: 'rating must be up or down' });
+        }
+
+        const chat = await Chat.findOne({ _id: chatId, participants: userId }).lean();
+        if (!chat) {
+            return res.status(404).json({ success: false, message: 'Chat not found' });
+        }
+
+        await AIUsage.create({
+            userId,
+            model: 'feedback',
+            promptType: 'feedback',
+            feedbackRating: rating,
+            meta: {
+                chatId: String(chatId),
+                messageIndex: Number(messageIndex || 0),
+                reason: String(reason || '')
+            }
+        });
+
+        res.status(200).json({ success: true, message: 'Feedback recorded' });
+    } catch (error) {
+        console.error('Submit feedback error:', error);
+        res.status(500).json({ success: false, message: 'Failed to record feedback' });
     }
 };

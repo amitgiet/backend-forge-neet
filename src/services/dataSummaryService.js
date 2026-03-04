@@ -1,90 +1,132 @@
 const AITools = require('./aiTools');
 
 class DataSummaryService {
+    static toDateLabel(value) {
+        if (!value) return 'unknown date';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return 'unknown date';
+        return date.toLocaleDateString();
+    }
+
+    static availabilityFromCount(sourceCount) {
+        if (sourceCount >= 2) return 'sufficient';
+        if (sourceCount === 1) return 'partial';
+        return 'insufficient';
+    }
+
     /**
-     * Generate a compact master summary for the user.
-     * Returns { summaryText, sourcedFactsCount, isSufficient, trend, hasQuizzes, quizzesCount }
+     * Generate a compact master summary for AI chat prompts.
+     * Returns:
+     * {
+     *   summaryText, sourcedFactsCount, isSufficient, dataAvailability,
+     *   dataSourcesUsed, trend, hasQuizzes, quizzesCount
+     * }
      */
     static async generateMasterSummary(userId) {
-        const promises = await Promise.allSettled([
+        const settled = await Promise.allSettled([
             AITools.getOverallAccuracy(userId),
             AITools.getLastQuiz(userId, 5),
-            AITools.getWeakTopics(userId, 5),
-            AITools.getRevisionDue(userId),
+            AITools.getCurriculumProgressSummary(userId),
+            AITools.getMockTestCompletionSummary(userId),
             AITools.getStudyInsights(userId),
-            AITools.getAccuracyTrend(userId, 14)
+            AITools.getCombinedPerformanceTrend(userId, 14),
+            AITools.getRevisionDue(userId)
         ]);
 
-        const [overallRes, lastQuizRes, weakRes, revisionRes, insightsRes, trendRes] = promises;
+        const [
+            overallRes,
+            lastQuizRes,
+            curriculumRes,
+            mockRes,
+            insightsRes,
+            combinedTrendRes,
+            revisionDueRes
+        ] = settled;
 
-        let facts = [];
-        let count = 0;
+        const facts = [];
+        let sourcedFactsCount = 0;
+        const dataSourcesUsed = [];
 
-        // Overall accuracy
-        if (overallRes.status === 'fulfilled' && overallRes.value && typeof overallRes.value.accuracy === 'number') {
-            facts.push(`Overall accuracy: ${overallRes.value.accuracy}%`);
-            count++;
-        }
-
-        // Last quiz(s)
         let quizzesCount = 0;
-        if (lastQuizRes.status === 'fulfilled' && Array.isArray(lastQuizRes.value) && lastQuizRes.value.length > 0) {
-            const q = lastQuizRes.value[0];
-            facts.push(`Last quiz: ${q.topic || 'Unknown'} on ${q.date ? new Date(q.date).toLocaleDateString() : 'unknown date'} - ${q.accuracy}%`);
-            count++;
-            quizzesCount = lastQuizRes.value.length;
-        }
-
-        // Weak topics
-        if (weakRes.status === 'fulfilled' && Array.isArray(weakRes.value) && weakRes.value.length > 0) {
-            const topics = weakRes.value.slice(0,3).map(t => t.topic || t.lineId || 'unknown');
-            facts.push(`Weak topics: ${topics.join(', ')}`);
-            count++;
-        }
-
-        // Revisions due
-        if (revisionRes.status === 'fulfilled' && revisionRes.value && typeof revisionRes.value.total === 'number') {
-            facts.push(`Revisions due: ${revisionRes.value.total}`);
-            if (revisionRes.value.total > 0) count++;
-        }
-
-        // Study insights
-        if (insightsRes.status === 'fulfilled' && insightsRes.value) {
-            const ins = insightsRes.value;
-            facts.push(`Weekly progress: ${ins.completed || 0}h completed, goal ${ins.goal || 0}h`);
-            count++;
-        }
-
-        // Trend detection (improving/declining/stable)
+        let hasQuizzes = false;
         let trend = { status: 'unknown', change: 0 };
-        try {
-            if (trendRes.status === 'fulfilled' && Array.isArray(trendRes.value) && trendRes.value.length >= 2) {
-                const arr = trendRes.value.map(d => ({ date: d.date, accuracy: Number(d.accuracy || 0) }));
-                const first = arr[0].accuracy || 0;
-                const last = arr[arr.length - 1].accuracy || 0;
-                const diff = last - first;
-                trend.change = Math.round(diff * 100) / 100;
-                if (diff > 2) trend.status = 'improving';
-                else if (diff < -2) trend.status = 'declining';
-                else trend.status = 'stable';
-                facts.push(`Accuracy trend (last ${arr.length} days): ${trend.status} (${trend.change} pts)`);
-                count++;
-            }
-        } catch (e) {
-            // ignore trend errors
+
+        if (overallRes.status === 'fulfilled' && overallRes.value) {
+            const overall = overallRes.value;
+            facts.push(`Overall accuracy: ${Number(overall.accuracy || 0)}%`);
+            facts.push(`Questions attempted: ${Number(overall.totalQuestions || 0)}`);
+            sourcedFactsCount += 1;
+            dataSourcesUsed.push('overall_accuracy');
         }
 
-        const summaryText = facts.length > 0 ? facts.join('\n- ') : 'No data available';
+        if (lastQuizRes.status === 'fulfilled' && Array.isArray(lastQuizRes.value) && lastQuizRes.value.length > 0) {
+            const last = lastQuizRes.value[0];
+            quizzesCount = lastQuizRes.value.length;
+            hasQuizzes = true;
+            facts.push(`Last quiz: ${last.topic || 'Unknown'} on ${this.toDateLabel(last.date)} (${Number(last.accuracy || 0)}%)`);
+            sourcedFactsCount += 1;
+            dataSourcesUsed.push('quiz_attempts');
+        }
 
-        const hasQuizzes = quizzesCount > 0;
+        if (curriculumRes.status === 'fulfilled' && curriculumRes.value) {
+            const c = curriculumRes.value;
+            facts.push(
+                `Curriculum progress: ${Number(c.completedSubtopics || 0)}/${Number(c.totalAvailableSubtopics || 0)} subtopics completed, ${Number(c.attemptedSubtopics || 0)} attempted, ${Number(c.activeRuns || 0)} active runs`
+            );
+            if (Number(c.avgBestScore || 0) > 0) {
+                facts.push(`Curriculum avg best score: ${Number(c.avgBestScore || 0)}%`);
+            }
+            if (Number(c.attemptedSubtopics || 0) > 0 || Number(c.activeRuns || 0) > 0) {
+                sourcedFactsCount += 1;
+                dataSourcesUsed.push('curriculum');
+            }
+        }
 
-        // Heuristic: sufficient if at least 2 sourced facts exist AND user has at least one quiz attempt
-        const isSufficient = count >= 2 && hasQuizzes;
+        if (mockRes.status === 'fulfilled' && mockRes.value) {
+            const m = mockRes.value;
+            facts.push(`Mock tests: ${Number(m.completedTests || 0)} completed, ${Number(m.pendingTests || 0)} pending`);
+            if (Number(m.totalTests || 0) > 0) {
+                sourcedFactsCount += 1;
+                dataSourcesUsed.push('mock_tests');
+            }
+        }
+
+        if (revisionDueRes.status === 'fulfilled' && revisionDueRes.value) {
+            facts.push(`Revisions due today: ${Number(revisionDueRes.value.total || 0)}`);
+        }
+
+        if (insightsRes.status === 'fulfilled' && insightsRes.value) {
+            const weekly = insightsRes.value.weekly || {};
+            facts.push(`Weekly study: ${Number(weekly.completedHours || 0)}h / ${Number(weekly.goalHours || 0)}h goal`);
+            if (Number(insightsRes.value.revisionSessions || 0) > 0 || Number(insightsRes.value.totalStudyTime || 0) > 0) {
+                sourcedFactsCount += 1;
+                dataSourcesUsed.push('revision_sessions');
+            }
+        }
+
+        if (combinedTrendRes.status === 'fulfilled' && combinedTrendRes.value) {
+            const trendData = combinedTrendRes.value;
+            trend = trendData.summary || trend;
+            if (trend.status && trend.status !== 'unknown') {
+                facts.push(`Combined performance trend (14d): ${trend.status} (${Number(trend.change || 0)} pts)`);
+            }
+            if (Array.isArray(trendData.trend) && trendData.trend.length > 0) {
+                sourcedFactsCount += 1;
+                dataSourcesUsed.push('combined_trend');
+            }
+        }
+
+        const uniqueSources = Array.from(new Set(dataSourcesUsed));
+        const sourceCount = uniqueSources.length;
+        const dataAvailability = this.availabilityFromCount(sourceCount);
+        const isSufficient = dataAvailability === 'sufficient';
 
         return {
-            summaryText: (summaryText && summaryText !== 'No data available') ? `- ${summaryText}` : 'No data available',
-            sourcedFactsCount: count,
+            summaryText: facts.length > 0 ? `- ${facts.join('\n- ')}` : 'No data available',
+            sourcedFactsCount,
             isSufficient,
+            dataAvailability,
+            dataSourcesUsed: uniqueSources,
             trend,
             hasQuizzes,
             quizzesCount

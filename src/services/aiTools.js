@@ -7,6 +7,11 @@ const Question = require('../models/Question');
 const NCERTLine = require('../models/NCERTLine');
 const Chapter = require('../models/Chapter');
 const QuizMeta = require('../models/QuizMeta');
+const ImportedCurriculum = require('../models/ImportedCurriculum');
+const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
+const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun');
+const MockTest = require('../models/MockTest');
+const MockTestProgress = require('../models/MockTestProgress');
 const QuizFactoryService = require('./quizFactoryService');
 const GeminiService = require('./geminiService');
 
@@ -242,6 +247,7 @@ class AITools {
         return lines
             .filter(l => l.overallAccuracy < 70)
             .map(l => ({
+                lineId: l.lineId?._id ? String(l.lineId._id) : (l.lineId ? String(l.lineId) : null),
                 topic: l.lineId?.ncertText || 'Unknown',
                 subject: l.lineId?.subject,
                 chapter: l.lineId?.chapter,
@@ -500,6 +506,15 @@ class AITools {
         const user = await User.findById(userId).lean();
         const weakTopics = await this.getWeakTopics(userId, 3);
         const revisionDue = await this.getRevisionDue(userId);
+        const weekStart = new Date();
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+        const weeklySessions = await SessionAttempt.find({
+            userId,
+            sessionDate: { $gte: weekStart }
+        }).lean();
+        const weeklyMinutes = weeklySessions.reduce((sum, s) => sum + (Number(s.timeSpent || 0) / 60), 0);
+        const weeklyGoalHours = Number(user?.analytics?.weeklyGoalHours || 42);
         
         return {
             totalStudyTime: user?.analytics?.totalStudyTime || 0,
@@ -507,7 +522,12 @@ class AITools {
             weakTopicsCount: weakTopics.length,
             revisionsDue: revisionDue.total,
             level: user?.gamification?.level || 1,
-            xp: user?.gamification?.totalXP || 0
+            xp: user?.gamification?.totalXP || 0,
+            weekly: {
+                completedHours: Math.round((weeklyMinutes / 60) * 10) / 10,
+                goalHours: weeklyGoalHours
+            },
+            revisionSessions: weeklySessions.length
         };
     }
 
@@ -892,6 +912,384 @@ class AITools {
             chapter: quiz.chapterId || '',
             reason: 'Generated now (saved for reuse)'
         }];
+    }
+
+    static async getCurriculumProgressSummary(userId, subject = null) {
+        const match = { userId };
+        if (subject) match.subject = String(subject).toLowerCase();
+
+        const attempts = await ImportedSubtopicAttempt.find(
+            match,
+            { subject: 1, chapterId: 1, topic: 1, subTopic: 1, percentage: 1, attemptedAt: 1 }
+        ).sort({ attemptedAt: -1 }).lean();
+
+        const keyStats = new Map();
+        for (const row of attempts) {
+            const key = `${row.subject}|||${row.chapterId}|||${row.topic}|||${row.subTopic}`;
+            if (!keyStats.has(key)) {
+                keyStats.set(key, {
+                    bestScore: 0,
+                    attempts: 0
+                });
+            }
+            const item = keyStats.get(key);
+            item.attempts += 1;
+            item.bestScore = Math.max(item.bestScore, Number(row.percentage || 0));
+        }
+
+        const attemptedSubtopics = keyStats.size;
+        const completedSubtopics = Array.from(keyStats.values()).filter((v) => Number(v.bestScore || 0) >= 60).length;
+        const avgBestScore = attemptedSubtopics > 0
+            ? Math.round((Array.from(keyStats.values()).reduce((sum, v) => sum + Number(v.bestScore || 0), 0) / attemptedSubtopics) * 10) / 10
+            : 0;
+
+        const now = new Date();
+        const activeRunMatch = {
+            userId,
+            status: 'in_progress',
+            $or: [{ expiresAt: { $gte: now } }, { expiresAt: { $exists: false } }, { expiresAt: null }]
+        };
+        if (subject) activeRunMatch.subject = String(subject).toLowerCase();
+        const activeRuns = await ImportedCurriculumQuizRun.countDocuments(activeRunMatch);
+
+        const curriculumMatch = {};
+        if (subject) curriculumMatch.subject = String(subject).toLowerCase();
+        const chapters = await ImportedCurriculum.find(curriculumMatch, { subject: 1, topics: 1 }).lean();
+        let totalAvailableSubtopics = 0;
+        chapters.forEach((chapter) => {
+            (chapter.topics || []).forEach((topicNode) => {
+                (topicNode.sub_topics || []).forEach((subNode) => {
+                    if (Array.isArray(subNode.uids) && subNode.uids.length > 0) {
+                        totalAvailableSubtopics += 1;
+                    }
+                });
+            });
+        });
+
+        const inProgressSubtopics = Math.max(0, attemptedSubtopics - completedSubtopics);
+        return {
+            subject: subject ? String(subject).toLowerCase() : 'all',
+            attemptedSubtopics,
+            completedSubtopics,
+            inProgressSubtopics,
+            totalAvailableSubtopics,
+            completionPercentage: totalAvailableSubtopics > 0 ? Math.round((completedSubtopics / totalAvailableSubtopics) * 100) : 0,
+            activeRuns,
+            avgBestScore
+        };
+    }
+
+    static async getCurriculumWeakSubtopics(userId, limit = 5, subject = null) {
+        const match = { userId };
+        if (subject) match.subject = String(subject).toLowerCase();
+
+        const attempts = await ImportedSubtopicAttempt.find(
+            match,
+            { subject: 1, chapterId: 1, topic: 1, subTopic: 1, percentage: 1, attemptedAt: 1 }
+        ).sort({ attemptedAt: -1 }).lean();
+
+        const map = new Map();
+        for (const row of attempts) {
+            const key = `${row.subject}|||${row.chapterId}|||${row.topic}|||${row.subTopic}`;
+            if (!map.has(key)) {
+                map.set(key, {
+                    subject: row.subject,
+                    chapterId: row.chapterId,
+                    topic: row.topic,
+                    subTopic: row.subTopic,
+                    attempts: 0,
+                    bestScore: 0,
+                    lastScore: Number(row.percentage || 0),
+                    lastAttemptAt: row.attemptedAt || null
+                });
+            }
+            const entry = map.get(key);
+            entry.attempts += 1;
+            entry.bestScore = Math.max(entry.bestScore, Number(row.percentage || 0));
+        }
+
+        return Array.from(map.values())
+            .filter((item) => item.attempts > 0 && Number(item.bestScore || 0) < 60)
+            .sort((a, b) => Number(a.bestScore || 0) - Number(b.bestScore || 0))
+            .slice(0, Math.max(1, Number(limit) || 5));
+    }
+
+    static async getCurriculumResumeQueue(userId, limit = 5) {
+        const rows = await ImportedCurriculumQuizRun.find({
+            userId,
+            status: 'in_progress',
+            $or: [{ expiresAt: { $gte: new Date() } }, { expiresAt: null }, { expiresAt: { $exists: false } }]
+        })
+            .sort({ lastActivityAt: -1 })
+            .limit(Math.max(1, Number(limit) || 5))
+            .lean();
+
+        return rows.map((run) => ({
+            runId: String(run._id),
+            subject: run.subject,
+            chapterId: run.chapterId,
+            topic: run.topic,
+            subTopic: run.subTopic,
+            mode: run.mode,
+            attemptedQuestions: Number(run.attemptedQuestions || 0),
+            totalQuestions: Number(run.totalQuestions || (run.uids || []).length || 0),
+            lastActivityAt: run.lastActivityAt || null,
+            expiresAt: run.expiresAt || null
+        }));
+    }
+
+    static async getMockTestCompletionSummary(userId, filters = {}) {
+        const query = { isActive: true };
+        const examType = filters?.examType ? String(filters.examType) : null;
+        const testType = filters?.testType ? String(filters.testType) : null;
+        const classCategory = filters?.classCategory ? String(filters.classCategory) : null;
+        const freeOnly = filters?.freeOnly === true || filters?.freeOnly === 'true';
+
+        if (examType) query.examType = examType;
+        if (testType) query.testType = testType;
+        if (classCategory && classCategory !== 'all') query.classCategory = classCategory;
+        if (freeOnly) query.accessType = 'FREE';
+
+        const tests = await MockTest.find(query, { testId: 1, title: 1 }).lean();
+        const ids = tests.map((t) => t.testId);
+        const progress = await MockTestProgress.find({ userId, testId: { $in: ids } }).lean();
+        const completedSet = new Set(progress.filter((p) => p.completed).map((p) => p.testId));
+        const completed = tests.filter((t) => completedSet.has(t.testId)).length;
+
+        return {
+            totalTests: tests.length,
+            completedTests: completed,
+            pendingTests: Math.max(0, tests.length - completed),
+            completionPercentage: tests.length > 0 ? Math.round((completed / tests.length) * 100) : 0
+        };
+    }
+
+    static async getMockPendingTests(userId, limit = 5, filters = {}) {
+        const query = { isActive: true };
+        if (filters?.examType) query.examType = String(filters.examType);
+        if (filters?.testType) query.testType = String(filters.testType);
+        if (filters?.classCategory && String(filters.classCategory) !== 'all') query.classCategory = String(filters.classCategory);
+        if (filters?.freeOnly === true || filters?.freeOnly === 'true') query.accessType = 'FREE';
+
+        const tests = await MockTest.find(query, {
+            testId: 1,
+            title: 1,
+            testType: 1,
+            classCategory: 1,
+            resources: 1,
+            examType: 1
+        }).lean();
+        const ids = tests.map((t) => t.testId);
+        const progress = await MockTestProgress.find({ userId, testId: { $in: ids } }).lean();
+        const completedSet = new Set(progress.filter((p) => p.completed).map((p) => p.testId));
+
+        return tests
+            .filter((t) => !completedSet.has(t.testId))
+            .slice(0, Math.max(1, Number(limit) || 5))
+            .map((t) => ({
+                id: String(t._id),
+                testId: t.testId,
+                title: t.title,
+                examType: t.examType,
+                testType: t.testType,
+                classCategory: t.classCategory,
+                questionPdf: t.resources?.questionPdf || null,
+                answerPdf: t.resources?.answerPdf || null
+            }));
+    }
+
+    static async getCombinedPerformanceTrend(userId, days = 14) {
+        const daysNum = Math.max(1, Math.min(90, Number(days) || 14));
+        const startDate = new Date();
+        startDate.setHours(0, 0, 0, 0);
+        startDate.setDate(startDate.getDate() - (daysNum - 1));
+
+        const [quizRows, curriculumRows, testRows] = await Promise.all([
+            QuizMeta.aggregate([
+                { $match: { attempts: { $exists: true, $ne: [] } } },
+                { $unwind: '$attempts' },
+                { $match: { 'attempts.userId': userId, 'attempts.attemptDate': { $gte: startDate } } },
+                {
+                    $project: {
+                        date: { $dateToString: { format: '%Y-%m-%d', date: '$attempts.attemptDate' } },
+                        score: { $ifNull: ['$attempts.percentage', 0] }
+                    }
+                }
+            ]).exec(),
+            ImportedSubtopicAttempt.aggregate([
+                { $match: { userId, attemptedAt: { $gte: startDate } } },
+                {
+                    $project: {
+                        date: { $dateToString: { format: '%Y-%m-%d', date: '$attemptedAt' } },
+                        score: { $ifNull: ['$percentage', 0] }
+                    }
+                }
+            ]).exec(),
+            TestAttempt.aggregate([
+                { $match: { userId, submittedAt: { $gte: startDate }, status: { $in: ['submitted', 'COMPLETED'] } } },
+                {
+                    $project: {
+                        date: { $dateToString: { format: '%Y-%m-%d', date: '$submittedAt' } },
+                        score: { $ifNull: ['$results.percentage', 0] }
+                    }
+                }
+            ]).exec()
+        ]);
+
+        const map = new Map();
+        const pushMetric = (date, field, value) => {
+            if (!map.has(date)) {
+                map.set(date, {
+                    date,
+                    quizzes: [],
+                    curriculum: [],
+                    tests: []
+                });
+            }
+            map.get(date)[field].push(Number(value || 0));
+        };
+
+        quizRows.forEach((row) => pushMetric(row.date, 'quizzes', row.score));
+        curriculumRows.forEach((row) => pushMetric(row.date, 'curriculum', row.score));
+        testRows.forEach((row) => pushMetric(row.date, 'tests', row.score));
+
+        const result = Array.from(map.values())
+            .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+            .map((row) => {
+                const avg = (arr) => (arr.length > 0
+                    ? Math.round((arr.reduce((sum, v) => sum + Number(v || 0), 0) / arr.length) * 10) / 10
+                    : null);
+                const quizAvg = avg(row.quizzes);
+                const curriculumAvg = avg(row.curriculum);
+                const testAvg = avg(row.tests);
+                const all = [quizAvg, curriculumAvg, testAvg].filter((v) => typeof v === 'number');
+                const overall = all.length > 0
+                    ? Math.round((all.reduce((sum, v) => sum + Number(v || 0), 0) / all.length) * 10) / 10
+                    : null;
+
+                return {
+                    date: row.date,
+                    quizzes: quizAvg,
+                    curriculum: curriculumAvg,
+                    tests: testAvg,
+                    overall,
+                    samples: row.quizzes.length + row.curriculum.length + row.tests.length
+                };
+            });
+
+        const validOverall = result.filter((d) => typeof d.overall === 'number');
+        let summary = { status: 'unknown', change: 0 };
+        if (validOverall.length >= 2) {
+            const first = Number(validOverall[0].overall || 0);
+            const last = Number(validOverall[validOverall.length - 1].overall || 0);
+            const diff = Math.round((last - first) * 10) / 10;
+            summary = {
+                status: diff > 2 ? 'improving' : diff < -2 ? 'declining' : 'stable',
+                change: diff
+            };
+        }
+
+        return { days: daysNum, trend: result, summary };
+    }
+
+    static async buildTodayActionPlan(userId, timeBudgetMinutes = 90, maxTasks = 3) {
+        const budget = Math.max(30, Math.min(360, Number(timeBudgetMinutes) || 90));
+        const cap = Math.max(1, Math.min(8, Number(maxTasks) || 3));
+
+        const [resumeQueue, weakSubtopics, pendingMocks, weakTopics] = await Promise.all([
+            this.getCurriculumResumeQueue(userId, 3),
+            this.getCurriculumWeakSubtopics(userId, 5),
+            this.getMockPendingTests(userId, 5),
+            this.getWeakTopics(userId, 5)
+        ]);
+
+        const tasks = [];
+
+        for (const run of resumeQueue) {
+            if (tasks.length >= cap) break;
+            tasks.push({
+                id: `resume-${run.runId}`,
+                title: `Resume ${run.mode === 'test' ? 'Test' : 'Practice'}: ${run.subTopic}`,
+                reason: `You already attempted ${run.attemptedQuestions}/${run.totalQuestions} questions.`,
+                durationMinutes: 30,
+                priority: 'high',
+                actionType: 'resume_curriculum',
+                payload: {
+                    runId: run.runId,
+                    subject: run.subject,
+                    chapterId: run.chapterId,
+                    topic: run.topic,
+                    subTopic: run.subTopic
+                }
+            });
+        }
+
+        for (const sub of weakSubtopics) {
+            if (tasks.length >= cap) break;
+            const exists = tasks.some((t) => t.payload?.subTopic === sub.subTopic && t.payload?.chapterId === sub.chapterId);
+            if (exists) continue;
+            tasks.push({
+                id: `weak-subtopic-${sub.subject}-${sub.chapterId}-${sub.subTopic}`.replace(/\s+/g, '-').toLowerCase(),
+                title: `Improve weak subtopic: ${sub.subTopic}`,
+                reason: `Best score ${sub.bestScore}% across ${sub.attempts} attempts.`,
+                durationMinutes: 25,
+                priority: 'high',
+                actionType: 'start_curriculum_quiz',
+                payload: {
+                    subject: sub.subject,
+                    chapterId: sub.chapterId,
+                    topic: sub.topic,
+                    subTopic: sub.subTopic,
+                    mode: 'practice'
+                }
+            });
+        }
+
+        for (const mock of pendingMocks) {
+            if (tasks.length >= cap) break;
+            tasks.push({
+                id: `pending-mock-${mock.id}`,
+                title: `Take pending mock: ${mock.title}`,
+                reason: 'Pending mock test can improve exam readiness.',
+                durationMinutes: 45,
+                priority: 'medium',
+                actionType: mock.questionPdf ? 'open_mock_pdf' : 'open_test_series',
+                payload: {
+                    mockId: mock.id,
+                    testId: mock.testId,
+                    title: mock.title,
+                    questionPdf: mock.questionPdf || null
+                }
+            });
+        }
+
+        for (const topic of weakTopics) {
+            if (tasks.length >= cap) break;
+            tasks.push({
+                id: `weak-topic-${String(topic.lineId || topic.topic).replace(/\s+/g, '-').toLowerCase()}`,
+                title: `Practice weak topic: ${topic.topic}`,
+                reason: `Current accuracy ${topic.accuracy || 0}%.`,
+                durationMinutes: 20,
+                priority: 'medium',
+                actionType: 'start_ai_quiz',
+                payload: {
+                    topic: topic.topic,
+                    subject: topic.subject || 'general',
+                    chapter: topic.chapter || ''
+                }
+            });
+        }
+
+        const cappedTasks = tasks.slice(0, cap);
+        const totalAllocatedMinutes = cappedTasks.reduce((sum, t) => sum + Number(t.durationMinutes || 0), 0);
+
+        return {
+            generatedAt: new Date(),
+            timeBudgetMinutes: budget,
+            maxTasks: cap,
+            totalAllocatedMinutes,
+            tasks: cappedTasks
+        };
     }
 }
 
