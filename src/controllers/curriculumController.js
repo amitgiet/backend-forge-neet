@@ -2,6 +2,7 @@ const ImportedCurriculum = require('../models/ImportedCurriculum');
 const ImportedQuestion = require('../models/ImportedQuestion');
 const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
 const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun');
+const UserQuestion = require('../models/UserQuestion');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
 const RUN_EXPIRY_HOURS = 24;
@@ -17,6 +18,14 @@ const sanitizeAnswers = (rawAnswers = [], total = 0) => {
     const normalized = [];
     for (let i = 0; i < targetLength; i += 1) {
         const value = answers[i];
+        if (value === null || value === undefined) {
+            normalized.push(-1);
+            continue;
+        }
+        if (typeof value === 'string' && value.trim() === '') {
+            normalized.push(-1);
+            continue;
+        }
         const idx = Number(value);
         normalized.push(Number.isInteger(idx) && idx >= 0 ? idx : -1);
     }
@@ -35,6 +44,20 @@ const sanitizeTimes = (rawTimes = [], total = 0) => {
 };
 
 const countAttempted = (answers = []) => answers.filter((a) => Number(a) >= 0).length;
+
+const enrollQuestionsInNeuronZ = async (userId, uids = [], answers = [], sourceInfo = {}) => {
+    const answeredUids = [];
+    for (let idx = 0; idx < uids.length; idx += 1) {
+        const answer = Number(answers[idx]);
+        if (!Number.isInteger(answer) || answer < 0) continue;
+        const uid = uids[idx];
+        if (uid === null || uid === undefined) continue;
+        answeredUids.push(String(uid));
+    }
+
+    if (answeredUids.length === 0) return { enrolled: 0, existing: 0 };
+    return UserQuestion.bulkEnroll(userId, answeredUids, sourceInfo);
+};
 
 const serializeRun = (runDoc) => {
     const run = runDoc?.toObject ? runDoc.toObject() : runDoc;
@@ -584,6 +607,17 @@ exports.submitCurriculumRun = async (req, res) => {
             uids: run.uids || [],
             attemptedAt: run.submittedAt,
         });
+
+        try {
+            await enrollQuestionsInNeuronZ(req.user.id, run.uids || [], run.answers || [], {
+                subject: run.subject,
+                chapterId: run.chapterId,
+                topic: run.topic,
+                subTopic: run.subTopic,
+            });
+        } catch (enrollErr) {
+            console.warn('[submitCurriculumRun] NeuronZ enroll failed (non-blocking):', enrollErr.message);
+        }
 
         res.status(200).json({
             success: true,
