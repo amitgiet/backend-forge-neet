@@ -11,7 +11,16 @@ const ALLOWED_MOCK_PDF_HOSTS = new Set([
     'memoneet.xyz',
     'www.memoneet.xyz',
     '216.48.182.197',
+    // New test series PDFs are hosted on Cloudinary
+    'res.cloudinary.com',
 ]);
+
+const isAllowedCloudinaryPath = (parsedUrl) => {
+    // Tighten access: allow only this cloud + raw/upload PDFs (matches our TestSeries.json URLs)
+    if (parsedUrl.hostname !== 'res.cloudinary.com') return true;
+    const p = String(parsedUrl.pathname || '');
+    return p.startsWith('/dnhjipawu/raw/upload/');
+};
 
 const downloadPdfOnce = (urlString, redirectCount = 0) => new Promise((resolve, reject) => {
     if (redirectCount > 5) {
@@ -254,8 +263,16 @@ exports.proxyMockPdf = async (req, res, next) => {
             return next(new ErrorResponse('Invalid url', 400));
         }
 
+        if (parsed.protocol !== 'https:') {
+            return next(new ErrorResponse('Only https URLs are allowed', 400));
+        }
+
         if (!ALLOWED_MOCK_PDF_HOSTS.has(parsed.hostname)) {
             return next(new ErrorResponse('PDF host is not allowed', 403));
+        }
+
+        if (!isAllowedCloudinaryPath(parsed)) {
+            return next(new ErrorResponse('PDF path is not allowed', 403));
         }
 
         const upstream = await downloadPdfOnce(parsed.toString(), 0);

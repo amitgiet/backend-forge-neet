@@ -126,7 +126,10 @@ const MockTestSchema = new mongoose.Schema({
         testFor: [String], // e.g. ['11','12','dropper','neet24']
         isFree: { type: Boolean, default: true },
         isHidden: { type: Boolean, default: false },
-        index: Number
+        index: Number,
+
+        // Preserve the original imported record so we don't lose fields over time
+        raw: mongoose.Schema.Types.Mixed
     },
 
     // Convenience field for UI filtering
@@ -134,6 +137,21 @@ const MockTestSchema = new mongoose.Schema({
         type: String,
         enum: ['11', '12', 'dropper', 'mixed', 'other'],
         default: 'other'
+    },
+
+    // High-level series grouping (e.g. "sigma", "yakeen 2.0", "yakeen 3.0 (hindi)")
+    seriesType: {
+        type: String,
+        default: ''
+    },
+
+    // Syllabus/taxonomy metadata imported from uploads/TestSeries.json
+    taxonomy: {
+        subjectNames: [String],
+        chapterNames: [String],
+        topicNames: [String],
+        chapterIds: [Number],
+        chapterTopicsMap: mongoose.Schema.Types.Mixed
     },
 
     // External resources
@@ -168,12 +186,12 @@ const MockTestSchema = new mongoose.Schema({
 });
 
 // Indexes
-MockTestSchema.index({ testId: 1 });
 MockTestSchema.index({ examType: 1, testType: 1 });
 MockTestSchema.index({ accessType: 1, isActive: 1 });
 MockTestSchema.index({ isLive: 1, scheduledAt: -1 });
 MockTestSchema.index({ tags: 1 });
 MockTestSchema.index({ classCategory: 1, isActive: 1 });
+MockTestSchema.index({ seriesType: 1, isActive: 1 });
 MockTestSchema.index({ 'source.testFor': 1 });
 
 // Virtual for attempt count
