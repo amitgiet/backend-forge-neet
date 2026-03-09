@@ -162,7 +162,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         topic,
         subject: subjectNorm,
         chapterId,
-        source: 'daily-dpp',
+        source: 'daily-challenge',
         quizType: 'mcq',
         level: 1,
         difficulty: difficultyNorm,
@@ -312,32 +312,48 @@ Make it suitable for JEE/NEET level exam preparation.`;
     try {
       console.log(`[DailyChallengeService] Submitting challenge for user ${userId}`);
 
-      const challenge = await DailyChallenge.findById(challengeId).lean();
-      if (!challenge) {
-        throw new Error('Challenge not found');
-      }
+      let challenge;
+      let questions;
+      let doc = null;
 
-      if (!challenge.quizId) {
-        throw new Error('Quiz not found for this challenge');
-      }
+      if (challengeId === 'emergency') {
+        challenge = await this.getEmergencyChallenge();
+        questions = (challenge.quizId?.questions || []).map(q => ({
+          question: q.question || '',
+          options: Array.isArray(q.options) ? q.options : [],
+          correctAnswer: q.correct || 0,
+          explanation: q.explanation || ''
+        }));
+      } else {
+        challenge = await DailyChallenge.findById(challengeId).lean();
+        if (!challenge) {
+          throw new Error('Challenge not found');
+        }
 
-      const quizResult = await QuizFactoryService.getQuizWithQuestions(String(challenge.quizId));
-      const questionDocs = quizResult?.questions || [];
-      if (questionDocs.length === 0) {
-        throw new Error('No questions found for this challenge');
-      }
+        if (!challenge.quizId) {
+          throw new Error('Quiz not found for this challenge');
+        }
 
-      const questions = questionDocs.map((q) => {
-        const opts = Array.isArray(q.options) ? q.options : [];
-        const correctKey = q.correctAnswer;
-        const correctAnswer = opts.findIndex((o) => o?.key === correctKey);
-        return {
-          question: q.question?.en || '',
-          options: opts.map((o) => o?.text?.en || ''),
-          correctAnswer: correctAnswer >= 0 ? correctAnswer : 0,
-          explanation: q.explanation?.en || ''
-        };
-      });
+        const quizResult = await QuizFactoryService.getQuizWithQuestions(String(challenge.quizId));
+        const questionDocs = quizResult?.questions || [];
+        if (questionDocs.length === 0) {
+          throw new Error('No questions found for this challenge');
+        }
+
+        questions = questionDocs.map((q) => {
+          const opts = Array.isArray(q.options) ? q.options : [];
+          const correctKey = q.correctAnswer;
+          const correctAnswer = opts.findIndex((o) => o?.key === correctKey);
+          return {
+            question: q.question?.en || '',
+            options: opts.map((o) => o?.text?.en || ''),
+            correctAnswer: correctAnswer >= 0 ? correctAnswer : 0,
+            explanation: q.explanation?.en || ''
+          };
+        });
+
+        doc = await DailyChallenge.findById(challengeId);
+      }
 
       // Calculate score
       let correctCount = 0;
@@ -364,17 +380,18 @@ Make it suitable for JEE/NEET level exam preparation.`;
           ? Math.round(challenge.xpReward * 0.75)
           : Math.round(challenge.xpReward * 0.5);
 
-      // Record completion
-      const doc = await DailyChallenge.findById(challengeId);
-      const alreadyCompleted = doc.completedBy.find(c => c.userId.toString() === userId.toString());
-      if (!alreadyCompleted) {
-        doc.completedBy.push({
-          userId,
-          score,
-          xpEarned,
-          answers: answers
-        });
-        await doc.save();
+      // Record completion only if it's a real DB document
+      if (doc) {
+        const alreadyCompleted = doc.completedBy.find(c => c.userId.toString() === userId.toString());
+        if (!alreadyCompleted) {
+          doc.completedBy.push({
+            userId,
+            score,
+            xpEarned,
+            answers: answers
+          });
+          await doc.save();
+        }
       }
 
       console.log(`[DailyChallengeService] Challenge completed: Score=${score}, XP=${xpEarned}`);
@@ -386,7 +403,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         xpEarned,
         detailedAnswers,
         challenge: {
-          id: doc._id,
+          id: doc ? doc._id : 'emergency',
           topic: challenge.topic,
           subject: challenge.subject
         }
@@ -429,7 +446,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         topic,
         subject: subjectNorm,
         chapterId,
-        source: 'daily-dpp',
+        source: 'daily-challenge',
         quizType: 'mcq',
         level: 1,
         difficulty: difficultyNorm,
@@ -484,7 +501,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         topic: 'General Science - Emergency Challenge',
         subject: 'physics',
         chapterId,
-        source: 'daily-dpp',
+        source: 'daily-challenge',
         quizType: 'mcq',
         level: 1,
         difficulty: 'medium',

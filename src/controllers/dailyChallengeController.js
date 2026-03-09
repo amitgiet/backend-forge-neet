@@ -13,24 +13,38 @@ class DailyChallengeController {
       const userId = req.user._id;
 
       const challenge = await DailyChallengeService.generateTodaysChallenge();
-      
-      const populatedChallenge = await DailyChallenge.findById(challenge._id).lean();
-      const quizResult = populatedChallenge?.quizId
-        ? await QuizFactoryService.getQuizWithQuestions(String(populatedChallenge.quizId))
-        : null;
 
-      const questions = (quizResult?.questions || []).map((q) => {
-        const opts = Array.isArray(q.options) ? q.options : [];
-        const optionTexts = opts.map((o) => o?.text?.en || '');
-        const correctKey = q.correctAnswer;
-        const correctAnswer = opts.findIndex((o) => o?.key === correctKey);
-        return {
-          question: q.question?.en || '',
-          options: optionTexts,
-          correctAnswer: correctAnswer >= 0 ? correctAnswer : 0,
-          explanation: q.explanation?.en || ''
-        };
-      });
+      let populatedChallenge;
+      let questions = [];
+
+      if (challenge._id === 'emergency') {
+        populatedChallenge = challenge;
+        // Fallback questions are already simple objects
+        questions = (challenge.quizId?.questions || []).map(q => ({
+          question: q.question || '',
+          options: Array.isArray(q.options) ? q.options : [],
+          correctAnswer: q.correct || 0,
+          explanation: q.explanation || ''
+        }));
+      } else {
+        populatedChallenge = await DailyChallenge.findById(challenge._id).lean();
+        const quizResult = populatedChallenge?.quizId
+          ? await QuizFactoryService.getQuizWithQuestions(String(populatedChallenge.quizId))
+          : null;
+
+        questions = (quizResult?.questions || []).map((q) => {
+          const opts = Array.isArray(q.options) ? q.options : [];
+          const optionTexts = opts.map((o) => o?.text?.en || '');
+          const correctKey = q.correctAnswer;
+          const correctAnswer = opts.findIndex((o) => o?.key === correctKey);
+          return {
+            question: q.question?.en || '',
+            options: optionTexts,
+            correctAnswer: correctAnswer >= 0 ? correctAnswer : 0,
+            explanation: q.explanation?.en || ''
+          };
+        });
+      }
 
       // Check if user already completed this challenge
       const userCompletion = (populatedChallenge.completedBy || []).find(
@@ -87,17 +101,29 @@ class DailyChallengeController {
       }
 
       // Check if user already completed this challenge today
-      const challenge = await DailyChallenge.findById(challengeId);
+      let challenge;
+      let alreadyCompleted = null;
+
+      if (challengeId === 'emergency') {
+        challenge = await DailyChallengeService.getEmergencyChallenge();
+        // Since database is completely unavailable for emergency fallback,
+        // we can't reliably track 'already completed'. We just bypass the check.
+        alreadyCompleted = null;
+      } else {
+        challenge = await DailyChallenge.findById(challengeId);
+        if (challenge && challenge.completedBy) {
+          alreadyCompleted = challenge.completedBy.find(
+            c => c.userId.toString() === userId.toString()
+          );
+        }
+      }
+
       if (!challenge) {
         return res.status(404).json({
           success: false,
           error: 'Challenge not found'
         });
       }
-
-      const alreadyCompleted = challenge.completedBy.find(
-        c => c.userId.toString() === userId.toString()
-      );
 
       if (alreadyCompleted) {
         return res.status(400).json({

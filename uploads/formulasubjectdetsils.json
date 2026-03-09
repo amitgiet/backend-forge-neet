@@ -1,0 +1,164 @@
+{
+    "success": true,
+    "message": "Landing details.",
+    "data": {
+        "_id": "68d27d9d14984589df5db4a7",
+        "title": "Formula Cards",
+        "icon": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/ic_fc.svg",
+        "subjects": [
+            {
+                "_id": "69ae4ec5a81a38349cbd5e2a",
+                "title": "Physics",
+                "icon": "https://cdn-assets.getmarks.app/app_assets/img/subjects/ic_content_subject_physics.svg",
+                "position": 1,
+                "subject": {
+                    "_id": "6616b045541e178e6be9319e",
+                    "position": 1,
+                    "subject": "615d708dbd4a37c4058ee5a8",
+                    "cardsCount": 857,
+                    "isChaptersComingSoon": false,
+                    "chapters": [
+                        {
+                            "_id": "6616b07b541e178e6be93752",
+                            "title": "Semiconductors",
+                            "icon": "ic_content_chapter_physics_semiconductors.svg",
+                            "position": 2,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_physics_semiconductors.svg",
+                            "color": "#16A249",
+                            "fcSubject": "6616b045541e178e6be9319e",
+                            "chapter": "615d6fed2b295b085ab6eba7",
+                            "cardsCount": 51,
+                            "topicsCount": 1
+                        },
+                        {
+                            "title": "Current Electricity",
+                            "icon": "ic_content_chapter_physics_current_electricity.svg",
+                            "position": 1,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_physics_current_electricity.svg",
+                            "color": "#2F86FF",
+                            "cardsCount": 39,
+                            "fcSubject": "6616b045541e178e6be9319e",
+                            "chapter": "615d6fed2b295b085ab6eb9c",
+                            "_id": "6616b048541e178e6be931d9",
+                            "topicsCount": 9
+                        },
+                        {
+                            "title": "Alternating Current",
+                            "icon": "ic_content_chapter_physics_alternating_current.svg",
+                            "position": 3,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_physics_alternating_current.svg",
+                            "color": "#FC275A",
+                            "cardsCount": 11,
+                            "fcSubject": "6616b045541e178e6be9319e",
+                            "chapter": "615d6fed2b295b085ab6eba0",
+                            "_id": "6616b04a541e178e6be9322f",
+                            "topicsCount": 2
+                        },
+                        {
+                            "title": "Rotational Motion",
+                            "icon": "ic_content_chapter_physics_rotational_motion.svg",
+                            "position": 4,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_physics_rotational_motion.svg",
+                            "color": "#B248CC",
+                            "cardsCount": 33,
+                            "fcSubject": "6616b045541e178e6be9319e",
+                            "chapter": "615d6fec2b295b085ab6eb91",
+                            "_id": "6616b069541e178e6be93570",
+                            "topicsCount": 5
+                        },
+                        {
+                            "title": "Oscillations",
+                            "icon": "ic_content_chapter_physics_oscillations.svg",
+                            "position": 5,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_physics_oscillations.svg",
+                            "color": "#2073E5",
+                            "cardsCount": 33,
+                            "fcSubject": "6616b045541e178e6be9319e",
+                            "chapter": "615d6fed2b295b085ab6eb98",
+                            "_id": "6616b072541e178e6be93658",
+                            "topicsCount": 5
+                        }
+                    ]
+                },
+                "isComingSoon": false
+            },
+            {
+                "_id": "69ae4ec5a81a38349cbd5e2b",
+                "title": "Chemistry",
+                "icon": "https://cdn-assets.getmarks.app/app_assets/img/subjects/ic_content_subject_chemistry.svg",
+                "position": 2,
+                "subject": {
+                    "_id": "6616b050541e178e6be932ce",
+                    "position": 2,
+                    "subject": "615d70bd9948bc1b21da2b1f",
+                    "cardsCount": 910,
+                    "isChaptersComingSoon": false,
+                    "chapters": [
+                        {
+                            "_id": "66c093351eae4ec20d61ac5a",
+                            "title": "Some Basic Concepts of Chemistry",
+                            "icon": "ic_content_chapter_chemistry_some_basic_concepts_of_chemistry.svg",
+                            "position": 1,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_chemistry_some_basic_concepts_of_chemistry.svg",
+                            "color": "#EB670C",
+                            "fcSubject": "6616b050541e178e6be932ce",
+                            "chapter": "615d6fed2b295b085ab6ebaa",
+                            "cardsCount": 12,
+                            "topicsCount": 3
+                        },
+                        {
+                            "title": "General Organic Chemistry",
+                            "icon": "ic_content_chapter_chemistry_general_organic_chemistry.svg",
+                            "position": 1,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_chemistry_general_organic_chemistry.svg",
+                            "color": "#F76707",
+                            "cardsCount": 40,
+                            "fcSubject": "6616b050541e178e6be932ce",
+                            "chapter": "615d6fee2b295b085ab6ebb6",
+                            "_id": "6616b056541e178e6be93361",
+                            "topicsCount": 7
+                        },
+                        {
+                            "title": "Structure of Atom",
+                            "icon": "ic_content_chapter_chemistry_structure_of_atom.svg",
+                            "position": 2,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_chemistry_structure_of_atom.svg",
+                            "color": "#37B24D",
+                            "cardsCount": 34,
+                            "fcSubject": "6616b050541e178e6be932ce",
+                            "chapter": "615d6fed2b295b085ab6ebab",
+                            "_id": "66c093381eae4ec20d61ac88",
+                            "topicsCount": 7
+                        },
+                        {
+                            "title": "Amines",
+                            "icon": "ic_content_chapter_chemistry_amines.svg",
+                            "position": 3,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_chemistry_amines.svg",
+                            "color": "#F76707",
+                            "cardsCount": 42,
+                            "fcSubject": "6616b050541e178e6be932ce",
+                            "chapter": "615d6fee2b295b085ab6ebc6",
+                            "_id": "6616b054541e178e6be93332",
+                            "topicsCount": 4
+                        },
+                        {
+                            "title": "Hydrocarbons",
+                            "icon": "ic_content_chapter_chemistry_hydrocarbons.svg",
+                            "position": 4,
+                            "bgColor": "https://cdn-assets.getmarks.app/app_assets/img/ui/formula_cards/fc_chapter_chemistry_hydrocarbons.svg",
+                            "color": "#37B24D",
+                            "cardsCount": 74,
+                            "fcSubject": "6616b050541e178e6be932ce",
+                            "chapter": "615d6fee2b295b085ab6ebb7",
+                            "_id": "6616b05a541e178e6be933cd",
+                            "topicsCount": 10
+                        }
+                    ]
+                },
+                "isComingSoon": false
+            }
+        ],
+        "examCategory": "615d3e29c52ffa3c944600dc"
+    }
+}

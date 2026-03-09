@@ -181,6 +181,7 @@ app.use(`/api/${API_VERSION}/curriculum`, require('./src/routes/curriculumRoutes
 app.use(`/api/${API_VERSION}/analytics`, require('./src/routes/analyticsRoutes'));
 app.use(`/api/${API_VERSION}/doubts`, require('./src/routes/doubtRoutes'));
 app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionFilterRoutes'));
+app.use(`/api/${API_VERSION}/formulas`, require('./src/routes/formulaRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));
