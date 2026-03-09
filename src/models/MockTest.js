@@ -145,6 +145,13 @@ const MockTestSchema = new mongoose.Schema({
         default: ''
     },
 
+    // Hierarchical reference links to Normalized Models
+    testSeriesDetails: {
+        subjectIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesSubject' }],
+        chapterIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesChapter' }],
+        topicIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesTopic' }]
+    },
+
     // Syllabus/taxonomy metadata imported from uploads/TestSeries.json
     taxonomy: {
         subjectNames: [String],
@@ -193,6 +200,11 @@ MockTestSchema.index({ tags: 1 });
 MockTestSchema.index({ classCategory: 1, isActive: 1 });
 MockTestSchema.index({ seriesType: 1, isActive: 1 });
 MockTestSchema.index({ 'source.testFor': 1 });
+
+// Fast-lookup Indexes for the new references
+MockTestSchema.index({ 'testSeriesDetails.subjectIds': 1 });
+MockTestSchema.index({ 'testSeriesDetails.chapterIds': 1 });
+MockTestSchema.index({ 'testSeriesDetails.topicIds': 1 });
 
 // Virtual for attempt count
 MockTestSchema.virtual('attempts', {
