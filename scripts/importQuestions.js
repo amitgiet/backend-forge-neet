@@ -33,6 +33,15 @@ async function connectDB() {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+// Raw content fields — the only ones importQuestions.js is allowed to write.
+// Bridge fields (chapterId, topic, subTopic, difficulty, isPYQ, pyqYear …)
+// are managed by separate backfill scripts and must NOT be overwritten here.
+const RAW_FIELDS = [
+    'questionId', 'question', 'correct_answer', 'correct_option',
+    'options', 'explanation', 'source', 'type', 'status',
+    'chapter_start', 'chapter_end',
+];
+
 function buildDoc(id, q) {
     return {
         questionId: String(id),
@@ -57,13 +66,40 @@ function buildDoc(id, q) {
 async function flushBatch(batch, stats) {
     if (batch.length === 0) return;
 
-    const ops = batch.map((doc) => ({
-        updateOne: {
-            filter: { questionId: doc.questionId },
-            update: { $set: doc },
-            upsert: true,
-        },
-    }));
+    const ops = batch.map((doc) => {
+        // Pick only the raw content fields for $set on existing docs.
+        // This ensures bridge fields (chapterId, topic, subTopic, difficulty,
+        // isPYQ, pyqYear …) set by backfill scripts are NEVER overwritten.
+        const rawUpdate = {};
+        RAW_FIELDS.forEach((f) => {
+            if (doc[f] !== undefined) rawUpdate[f] = doc[f];
+        });
+
+        return {
+            updateOne: {
+                filter: { questionId: doc.questionId },
+                update: {
+                    $set: rawUpdate,          // safe: only raw content fields
+                    $setOnInsert: {           // only on new docs — safe defaults
+                        subject: null,
+                        chapterId: null,
+                        topic: null,
+                        subTopic: null,
+                        difficulty: null,
+                        isPYQ: false,
+                        pyqYear: null,
+                        pyqExam: null,
+                        pyqShift: null,
+                        tags: [],
+                        imageUrl: null,
+                        isVerified: false,
+                        isActive: true,
+                    },
+                },
+                upsert: true,
+            },
+        };
+    });
 
     const result = await ImportedQuestion.bulkWrite(ops, { ordered: false });
     stats.inserted += result.upsertedCount;

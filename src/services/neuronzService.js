@@ -1,5 +1,8 @@
 const UserQuestion = require('../models/UserQuestion');
 const ImportedQuestion = require('../models/ImportedQuestion');
+const UserLine = require('../models/UserLine');
+const NCERTLine = require('../models/NCERTLine');
+const Chapter = require('../models/Chapter');
 const User = require('../models/User');
 const mongoose = require('mongoose');
 
@@ -172,6 +175,121 @@ class NeuronzService {
             dueToday: dueCount,
             totalQuestions: await UserQuestion.countDocuments({ userId }),
         };
+    }
+
+    /**
+     * Get summary of tracked topics (for Dashboard & Revision).
+     * Aggregates UserQuestions and UserLines to show due counts and L1-L7 distribution.
+     */
+    static async getTopicSummary(userId) {
+        const endOfToday = new Date();
+        endOfToday.setHours(23, 59, 59, 999);
+
+        // 1. Group UserQuestions by Topic
+        const questionSummary = await UserQuestion.aggregate([
+            { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+            {
+                $lookup: {
+                    from: 'importedquestions',
+                    localField: 'questionId',
+                    foreignField: 'questionId',
+                    as: 'qData'
+                }
+            },
+            { $unwind: '$qData' },
+            {
+                $group: {
+                    _id: '$qData.topic',
+                    topicId: { $first: '$qData.topic' },
+                    subject: { $first: '$qData.subject' },
+                    totalTracked: { $sum: 1 },
+                    dueNow: { $sum: { $cond: [{ $lte: ['$nextRevision', endOfToday] }, 1, 0] } },
+                    L1: { $sum: { $cond: [{ $eq: ['$level', 1] }, 1, 0] } },
+                    L2: { $sum: { $cond: [{ $eq: ['$level', 2] }, 1, 0] } },
+                    L3: { $sum: { $cond: [{ $eq: ['$level', 3] }, 1, 0] } },
+                    L4: { $sum: { $cond: [{ $eq: ['$level', 4] }, 1, 0] } },
+                    L5: { $sum: { $cond: [{ $eq: ['$level', 5] }, 1, 0] } },
+                    L6: { $sum: { $cond: [{ $eq: ['$level', 6] }, 1, 0] } },
+                    L7: { $sum: { $cond: [{ $eq: ['$level', 7] }, 1, 0] } },
+                }
+            }
+        ]);
+
+        // 2. Group UserLines by Chapter
+        const lineSummary = await UserLine.aggregate([
+            { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+            {
+                $lookup: {
+                    from: 'ncertlines',
+                    localField: 'lineId',
+                    foreignField: 'lineId',
+                    as: 'nData'
+                }
+            },
+            { $unwind: '$nData' },
+            {
+                $group: {
+                    _id: {
+                        subject: '$nData.subject',
+                        class: '$nData.class',
+                        chapter: '$nData.chapter'
+                    },
+                    totalTracked: { $sum: 1 },
+                    dueNow: { $sum: { $cond: [{ $lte: ['$nextRevision', endOfToday] }, 1, 0] } },
+                    L1: { $sum: { $cond: [{ $eq: ['$level', 1] }, 1, 0] } },
+                    L2: { $sum: { $cond: [{ $eq: ['$level', 2] }, 1, 0] } },
+                    L3: { $sum: { $cond: [{ $eq: ['$level', 3] }, 1, 0] } },
+                    L4: { $sum: { $cond: [{ $eq: ['$level', 4] }, 1, 0] } },
+                    L5: { $sum: { $cond: [{ $eq: ['$level', 5] }, 1, 0] } },
+                    L6: { $sum: { $cond: [{ $eq: ['$level', 6] }, 1, 0] } },
+                    L7: { $sum: { $cond: [{ $eq: ['$level', 7] }, 1, 0] } },
+                }
+            }
+        ]);
+
+        // Resolve Chapter Names for Lines
+        const mergedTopics = [];
+
+        for (const t of questionSummary) {
+            mergedTopics.push({
+                topicId: String(t.topicId || 'Unknown'),
+                topic: String(t.topicId || 'Multiple Topics'),
+                subject: String(t.subject || 'mixed').toLowerCase(),
+                totalTracked: t.totalTracked,
+                dueNow: t.dueNow,
+                byLevel: { L1: t.L1, L2: t.L2, L3: t.L3, L4: t.L4, L5: t.L5, L6: t.L6, L7: t.L7 },
+                masteryPercent: t.totalTracked > 0 ? Math.round((t.L7 / t.totalTracked) * 100) : 0,
+                lastActivityAt: null
+            });
+        }
+
+        for (const l of lineSummary) {
+            const { subject, class: cls, chapter: chNum } = l._id;
+            // Fetch real chapter name if possible
+            const chapterDoc = await Chapter.findOne({
+                subject: String(subject).toLowerCase(),
+                'ncert.class': cls,
+                'ncert.chapterNumber': chNum
+            }).lean();
+
+            const chapterName = chapterDoc?.name?.en || `Ch ${chNum} (${cls})`;
+
+            mergedTopics.push({
+                topicId: `NCERT-${subject}-${cls}-${chNum}`,
+                topic: `[Lines] ${chapterName}`,
+                subject: String(subject || 'mixed').toLowerCase(),
+                totalTracked: l.totalTracked,
+                dueNow: l.dueNow,
+                byLevel: { L1: l.L1, L2: l.L2, L3: l.L3, L4: l.L4, L5: l.L5, L6: l.L6, L7: l.L7 },
+                masteryPercent: l.totalTracked > 0 ? Math.round((l.L7 / l.totalTracked) * 100) : 0,
+                lastActivityAt: null
+            });
+        }
+
+        // Sort descending by dueNow
+        mergedTopics.sort((a, b) => b.dueNow - a.dueNow || b.totalTracked - a.totalTracked);
+
+        return { topics: mergedTopics };
     }
 
     /**

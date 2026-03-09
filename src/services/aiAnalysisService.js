@@ -301,90 +301,153 @@ Provide analysis in this JSON format:
     /**
      * Generate personalized study plan
      */
-    async generateStudyPlan(user, targetDate, focusAreas = []) {
-        if (!this.enabled) {
-            return this.getFallbackStudyPlan(user, targetDate);
-        }
+    /**
+     * Generate personalized study plan
+     */
+    async generateStudyPlan(user, targetDate, weakChapterIds = []) {
+        console.log(`Generating Hybrid Study Plan for ${user._id} | Weak Chapters: ${weakChapterIds.length}`);
 
-        try {
-            const prompt = `
-You are a NEET exam preparation expert.
+        let aiRecommendations = [];
 
-Generate a personalized NEET study plan:
-
-Student Profile:
-- Target Exam Date: ${targetDate}
-- Available Study Hours: ${user.profile.studyHoursPerDay} hours/day
-- Current Class: ${user.profile.class}
-- Focus Areas: ${focusAreas.join(', ') || 'All chapters'}
-
-Requirements:
-- Distribute study time across Physics, Chemistry, Biology (25:25:50 ratio)
-- Include daily mock tests and revision
-- Use spaced repetition for important chapters
-- Account for student's energy levels (morning: tough chapters, evening: easy/revision)
-
-Provide study plan in JSON format with daily tasks for next 7 days.
+        // 1. Get AI Recommendations (if enabled and we have weak chapters)
+        if (this.enabled && weakChapterIds.length > 0) {
+            try {
+                const prompt = `
+You are a NEET coach. The student is weak in these chapters: ${weakChapterIds.slice(0, 5).join(', ')}.
+Give 2 short, punchy, actionable recommendations to improve performance in these specific chapters.
+Return ONLY valid JSON:
+[
+  { "type": "FOCUS_AREA", "message": "string", "priority": "HIGH" }
+]
 `;
+                const result = await this.model.generateContent(prompt);
+                const response = await result.response;
+                const text = response.text();
 
-            const result = await this.model.generateContent(prompt);
-            const response = await result.response;
-            const text = response.text();
-
-            return this.parseStudyPlanResponse(text);
-
-        } catch (error) {
-            console.error('Study plan generation error:', error);
-            return this.getFallbackStudyPlan(user, targetDate);
-        }
-    }
-
-    /**
-     * Parse study plan response
-     */
-    parseStudyPlanResponse(response) {
-        try {
-            const jsonMatch = response.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]);
+                const jsonMatch = text.match(/\[[\s\S]*\]/);
+                if (jsonMatch) {
+                    aiRecommendations = JSON.parse(jsonMatch[0]);
+                }
+            } catch (error) {
+                console.error('AI recommendation generation error:', error);
             }
-            return null;
-        } catch (error) {
-            return null;
         }
-    }
 
-    /**
-     * Fallback study plan
-     */
-    getFallbackStudyPlan(user, targetDate) {
-        // Basic rule-based study plan
-        const dailyHours = user.profile.studyHoursPerDay;
+        // 2. Build Deterministic 7-Day Schedule
+        const dailyTasks = this.buildSyllabusSchedule(user, weakChapterIds);
 
         return {
-            dailySchedule: {
-                morning: {
-                    time: '06:00-09:00',
-                    subjects: ['physics'],
-                    activities: ['Tough chapter study', 'Problem solving']
-                },
-                afternoon: {
-                    time: '14:00-17:00',
-                    subjects: ['chemistry'],
-                    activities: ['NCERT reading', 'Practice MCQs']
-                },
-                evening: {
-                    time: '18:00-21:00',
-                    subjects: ['biology'],
-                    activities: ['Chapter completion', 'Mock test']
-                }
-            },
-            weeklyGoals: {
-                chapters: 5,
-                mockTests: 2,
-                revisionSessions: 3
-            }
+            dailyTasks,
+            recommendations: aiRecommendations.length > 0 ? aiRecommendations : [
+                { type: 'FOCUS_AREA', message: 'Maintain a consistent 6-hour study routine daily.', priority: 'MEDIUM' }
+            ]
         };
+    }
+
+    /**
+     * Deterministic Syllabus Generation (7 Days)
+     */
+    buildSyllabusSchedule(user, weakChapterIds = []) {
+        const days = [];
+        const studyHours = user.profile?.studyHoursPerDay || 6;
+
+        // Distribute tasks: 50% Bio, 25% Phys, 25% Chem
+        // We will mock chapters for now, but in reality these come from DB
+        const mockSyllabus = {
+            biology: ['Living World', 'Biological Classification', 'Plant Kingdom', 'Animal Kingdom', 'Morphology', 'Anatomy', 'Structural Org'],
+            physics: ['Physical World', 'Units & Measurements', 'Motion in Straight Line', 'Motion in Plane', 'Laws of Motion'],
+            chemistry: ['Some Basic Concepts', 'Structure of Atom', 'Classification of Elements', 'Chemical Bonding', 'States of Matter']
+        };
+
+        for (let i = 0; i < 7; i++) {
+            const date = new Date();
+            date.setDate(date.getDate() + i);
+            date.setHours(0, 0, 0, 0);
+
+            // Check if Sunday (Buffer Day)
+            const isSunday = date.getDay() === 0;
+
+            let tasks = [];
+
+            if (isSunday) {
+                // Buffer/Mock Day
+                tasks.push({
+                    chapterId: 'mock-test',
+                    subject: 'all',
+                    taskType: 'MOCK',
+                    title: 'Full Length NEET Mock Test',
+                    duration: 200, // 3hrs 20m
+                    timeSlot: 'afternoon',
+                    isCompleted: false
+                });
+                tasks.push({
+                    chapterId: 'revision-all',
+                    subject: 'all',
+                    taskType: 'REVISION',
+                    title: 'Backlog Catch-up & Analysis',
+                    duration: 120,
+                    timeSlot: 'evening',
+                    isCompleted: false
+                });
+            } else {
+                // Regular Study Day
+                // Rotate topics based on day
+                const bioTopic = mockSyllabus.biology[i % mockSyllabus.biology.length];
+                const physTopic = mockSyllabus.physics[i % mockSyllabus.physics.length];
+                const chemTopic = mockSyllabus.chemistry[i % mockSyllabus.chemistry.length];
+
+                // Inject weak chapter practice if any
+                const weakTopic = weakChapterIds.length > 0 ? weakChapterIds[i % weakChapterIds.length] : null;
+
+                // Morning: Study (Biology mostly)
+                tasks.push({
+                    chapterId: `bio-${i}`,
+                    subject: 'biology',
+                    taskType: 'STUDY',
+                    title: `Read NCERT: ${bioTopic}`,
+                    duration: 120,
+                    timeSlot: 'morning',
+                    isCompleted: false
+                });
+
+                // Afternoon: Physics/Chem Practice
+                const isPhysicsDay = i % 2 === 0;
+                tasks.push({
+                    chapterId: isPhysicsDay ? `phys-${i}` : `chem-${i}`,
+                    subject: isPhysicsDay ? 'physics' : 'chemistry',
+                    taskType: 'PRACTICE',
+                    title: `Solve 50 MCQs: ${isPhysicsDay ? physTopic : chemTopic}`,
+                    duration: 90,
+                    timeSlot: 'afternoon',
+                    isCompleted: false
+                });
+
+                // Evening: Weak Area Revision
+                if (weakTopic) {
+                    tasks.push({
+                        chapterId: weakTopic,
+                        subject: 'all',
+                        taskType: 'REVISION',
+                        title: `Revise Weak Chapter: ${weakTopic}`,
+                        duration: 60,
+                        timeSlot: 'evening',
+                        isCompleted: false
+                    });
+                }
+            }
+
+            days.push({
+                date,
+                dailyGoal: {
+                    studyHours: isSunday ? 6 : studyHours,
+                    completedHours: 0,
+                    percentage: 0
+                },
+                tasks
+            });
+        }
+
+        return days;
     }
 }
 
@@ -393,7 +456,7 @@ Provide study plan in JSON format with daily tasks for next 7 days.
  * Takes a structured summary object (built from QuizMeta + Question docs)
  * and returns markdown feedback about performance and next steps.
  */
-AIAnalysisService.prototype.analyzeLastQuizPerformance = async function(summary) {
+AIAnalysisService.prototype.analyzeLastQuizPerformance = async function (summary) {
     if (!summary || !summary.meta) {
         return 'No data available for your last quiz yet.';
     }
@@ -423,7 +486,7 @@ AIAnalysisService.prototype.analyzeLastQuizPerformance = async function(summary)
 /**
  * Build Gemini prompt for last quiz performance review.
  */
-AIAnalysisService.prototype.buildLastQuizPrompt = function(summary) {
+AIAnalysisService.prototype.buildLastQuizPrompt = function (summary) {
     const meta = summary.meta || {};
     const byChapter = Array.isArray(summary.byChapter) ? summary.byChapter : [];
     const byDifficulty = summary.byDifficulty || {};
@@ -474,7 +537,7 @@ ${safeJson}
 /**
  * Simple rule-based markdown summary when Gemini is not available.
  */
-AIAnalysisService.prototype.buildLastQuizFallbackMarkdown = function(summary) {
+AIAnalysisService.prototype.buildLastQuizFallbackMarkdown = function (summary) {
     const meta = summary?.meta || {};
     const byChapter = Array.isArray(summary?.byChapter) ? summary.byChapter : [];
     const byDifficulty = summary?.byDifficulty || {};
@@ -516,8 +579,7 @@ AIAnalysisService.prototype.buildLastQuizFallbackMarkdown = function(summary) {
     } else {
         weakChapters.forEach((ch) => {
             lines.push(
-                `- **Chapter ${ch.chapterId || ''}**: ${ch.accuracy ?? 0}% accuracy (${ch.correct ?? 0}/${
-                    ch.total ?? 0
+                `- **Chapter ${ch.chapterId || ''}**: ${ch.accuracy ?? 0}% accuracy (${ch.correct ?? 0}/${ch.total ?? 0
                 } questions correct)`
             );
         });

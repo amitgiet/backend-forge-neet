@@ -6,6 +6,7 @@ const {
     reviewBatch,
     getUserStats,
     getMasteryProgress,
+    getTopicSummary,
 } = require('../controllers/neuronzController');
 
 const { protect } = require('../middleware/auth');
@@ -24,6 +25,10 @@ router.get('/stats', getUserStats);
 // @route   GET /api/neuronz/mastery
 // @desc    Mastery progress for dashboard
 router.get('/mastery', getMasteryProgress);
+
+// @route   GET /api/neuronz/topics/summary
+// @desc    Get tracked topics summary
+router.get('/topics/summary', getTopicSummary);
 
 // @route   POST /api/neuronz/review
 // @desc    Submit single question answer in NeuronZ review session

@@ -251,7 +251,7 @@ UserSchema.methods.updateStreak = function () {
 
     if (lastStudy) {
         lastStudy.setHours(0, 0, 0, 0);
-        const diffDays = Math.floor((today - lastStudy) / (1000 * 60 * 60 * 24));
+        const diffDays = Math.round((today - lastStudy) / (1000 * 60 * 60 * 24));
 
         if (diffDays === 1) {
             // Consecutive day

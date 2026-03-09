@@ -17,6 +17,10 @@ exports.getStudyPlan = async (req, res, next) => {
             });
         }
 
+        if (plan && plan.dailyTasks) {
+            plan.dailyTasks.sort((a, b) => new Date(a.date) - new Date(b.date));
+        }
+
         res.status(200).json({
             success: true,
             data: plan
@@ -51,7 +55,7 @@ exports.generatePlan = async (req, res, next) => {
 
         const planData = {
             userId: req.user.id,
-            title: `NEET 2027 Sprint - ${new Date().toLocaleDateString()}`,
+            title: `NEET Sprint - ${new Date().toLocaleDateString()}`,
             examType: req.user.primaryExam || 'NEET_UG',
             targetDate: new Date(targetDate),
             startDate: new Date(),
@@ -59,13 +63,14 @@ exports.generatePlan = async (req, res, next) => {
             dailySchedule: {
                 studyHoursPerDay: req.user.profile.studyHoursPerDay || 6
             },
-            // In a real app, you'd map the aiPlan response to the schema more granularly
             progress: {
-                totalChapters: focusAreas.length > 0 ? focusAreas.length : 97,
+                totalChapters: 97, // Approximate total NEET chapters
                 completedChapters: 0,
-                totalHours: 500, // Placeholder
+                totalHours: 500,
                 completedHours: 0
-            }
+            },
+            dailyTasks: aiPlan.dailyTasks || [],
+            recommendations: aiPlan.recommendations || []
         };
 
         if (plan) {

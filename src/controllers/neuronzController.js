@@ -104,3 +104,15 @@ exports.getMasteryProgress = async (req, res, next) => {
         next(new ErrorResponse(error.message, 500));
     }
 };
+
+// @desc    Get topic tracked summary
+// @route   GET /api/neuronz/topics/summary
+// @access  Private
+exports.getTopicSummary = async (req, res, next) => {
+    try {
+        const summary = await NeuronzService.getTopicSummary(req.user.id);
+        res.status(200).json({ success: true, data: summary });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};

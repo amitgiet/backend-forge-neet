@@ -5,11 +5,11 @@ const User = require('../models/User');
 const QuizFactoryService = require('./quizFactoryService');
 
 class DailyChallengeService {
-  static SUBJECTS = ['Physics', 'Chemistry', 'Biology', 'Mathematics'];
+  static SUBJECTS = ['Physics', 'Chemistry', 'Biology'];
   static DIFFICULTIES = ['Easy', 'Medium', 'Hard'];
 
   /**
-   * Generate today's daily challenge with questions using AI
+   * Generate today's daily DPP with questions using AI
    */
   static async generateTodaysChallenge() {
     try {
@@ -18,7 +18,7 @@ class DailyChallengeService {
       // Check if today's challenge already exists
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       const existing = await DailyChallenge.findOne({ date: today, isActive: true }).populate('quizId');
       if (existing && existing.quizId) {
         console.log('[DailyChallengeService] Today\'s challenge already exists');
@@ -27,10 +27,10 @@ class DailyChallengeService {
 
       // Select random subject and generate topic
       const subject = this.SUBJECTS[Math.floor(Math.random() * this.SUBJECTS.length)];
-      const difficulty = this.DIFFICULTIES[1]; // Medium difficulty
-      
-      let topic = subject + ' - Daily Challenge';
-      
+      const difficulty = this.DIFFICULTIES[2]; // Hard difficulty
+
+      let topic = subject + ' - Daily DPP';
+
       try {
         topic = await this.generateTopic(subject);
         console.log(`[DailyChallengeService] Generated topic: ${topic} (${subject})`);
@@ -39,7 +39,7 @@ class DailyChallengeService {
         // Continue with default topic
       }
 
-      // Generate 5 MCQ questions via GeneratedQuiz
+      // Generate 10 MCQ questions via GeneratedQuiz
       let generatedQuiz;
       try {
         generatedQuiz = await this.generateQuiz(topic, subject, difficulty);
@@ -85,14 +85,14 @@ class DailyChallengeService {
   }
 
   /**
-   * Generate a topic for the daily challenge using AI
+   * Generate a topic for the daily DPP using AI
    */
   static async generateTopic(subject) {
     try {
-      const prompt = `Generate ONE interesting NCERT topic from ${subject} for a daily challenge. 
+      const prompt = `Generate ONE interesting NCERT topic from ${subject} for a daily DPP. 
       The topic should be:
       - Specific and focused (e.g., "Photosynthesis - Light Dependent Reactions" not just "Biology")
-      - At JEE/NEET level
+      - At NEET level
       - Interesting for student engagement
       
       Return ONLY the topic name, nothing else. Max 8 words.`;
@@ -105,8 +105,7 @@ class DailyChallengeService {
       const fallbackTopics = {
         Physics: 'Electromagnetic Induction',
         Chemistry: 'Organic Reaction Mechanisms',
-        Biology: 'Cellular Respiration',
-        Mathematics: 'Definite Integrals'
+        Biology: 'Cellular Respiration'
       };
       return fallbackTopics[subject] || 'General Concepts';
     }
@@ -140,7 +139,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
   }
 
   /**
-   * Generate 5 MCQ questions for the topic using AI and store in GeneratedQuiz
+   * Generate 10 MCQ questions for the topic using AI and store in GeneratedQuiz
    */
   static async generateQuiz(topic, subject, difficulty) {
     try {
@@ -153,8 +152,8 @@ Make it suitable for JEE/NEET level exam preparation.`;
       const { chapterId, questionIds } = await QuizFactoryService.generateQuestionsWithAI({
         subject: subjectNorm,
         topic,
-        count: 5,
-        difficulty: ['easy', 'medium', 'hard'].includes(difficultyNorm) ? difficultyNorm : 'medium',
+        count: 10,
+        difficulty: ['easy', 'medium', 'hard'].includes(difficultyNorm) ? difficultyNorm : 'hard',
         examTypes: ['NEET_UG']
       });
 
@@ -163,7 +162,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         topic,
         subject: subjectNorm,
         chapterId,
-        source: 'daily-challenge',
+        source: 'daily-dpp',
         quizType: 'mcq',
         level: 1,
         difficulty: difficultyNorm,
@@ -280,38 +279,6 @@ Make it suitable for JEE/NEET level exam preparation.`;
           correct: 2,
           explanation: 'The cell is the basic unit of all living organisms.'
         }
-      ],
-      Mathematics: [
-        {
-          question: 'What is the derivative of x²?',
-          options: ['x', '2x', 'x³', '2'],
-          correct: 1,
-          explanation: 'Using power rule: d/dx(x²) = 2x'
-        },
-        {
-          question: 'What is the value of sin(π/2)?',
-          options: ['0', '1', '-1', '√2/2'],
-          correct: 1,
-          explanation: 'sin(π/2) = 1'
-        },
-        {
-          question: 'What is the sum of angles in a triangle?',
-          options: ['90°', '180°', '270°', '360°'],
-          correct: 1,
-          explanation: 'The sum of angles in a triangle is always 180°.'
-        },
-        {
-          question: 'What is the solution to x² = 16?',
-          options: ['4', '±4', '8', '2'],
-          correct: 1,
-          explanation: 'x² = 16 has solutions x = 4 and x = -4'
-        },
-        {
-          question: 'What is the integral of x?',
-          options: ['1', 'x²/2 + C', '2x + C', 'x + C'],
-          correct: 1,
-          explanation: 'Using power rule: ∫x dx = x²/2 + C'
-        }
       ]
     };
 
@@ -333,8 +300,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
     const icons = {
       Physics: '⚛️',
       Chemistry: '🔬',
-      Biology: '🧬',
-      Mathematics: '📐'
+      Biology: '🧬'
     };
     return icons[subject] || '📚';
   }
@@ -390,11 +356,11 @@ Make it suitable for JEE/NEET level exam preparation.`;
       });
 
       const score = Math.round((correctCount / questions.length) * 100);
-      
+
       // Calculate XP based on score
-      const xpEarned = score >= 80 
-        ? challenge.xpReward 
-        : score >= 60 
+      const xpEarned = score >= 80
+        ? challenge.xpReward
+        : score >= 60
           ? Math.round(challenge.xpReward * 0.75)
           : Math.round(challenge.xpReward * 0.5);
 
@@ -463,7 +429,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         topic,
         subject: subjectNorm,
         chapterId,
-        source: 'daily-challenge',
+        source: 'daily-dpp',
         quizType: 'mcq',
         level: 1,
         difficulty: difficultyNorm,
@@ -496,7 +462,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
 
       // Create emergency challenge
       const fallbackQuestions = this.getFallbackQuestions('General Science', 'Physics');
-      
+
       const systemUser = await User.findOne({ email: 'system@neetforge.com' });
       const userId = systemUser?._id || new mongoose.Types.ObjectId();
 
@@ -518,7 +484,7 @@ Make it suitable for JEE/NEET level exam preparation.`;
         topic: 'General Science - Emergency Challenge',
         subject: 'physics',
         chapterId,
-        source: 'daily-challenge',
+        source: 'daily-dpp',
         quizType: 'mcq',
         level: 1,
         difficulty: 'medium',
