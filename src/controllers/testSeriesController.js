@@ -192,6 +192,9 @@ const fetchProgressMap = async (userId, tests) => {
     return new Map(rows.map((row) => [String(row.testId), row]));
 };
 
+const sortByNameAsc = (rows = []) =>
+    [...rows].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' }));
+
 const withProgress = async (userId, tests) => {
     const progressMap = await fetchProgressMap(userId, tests);
     return tests.map((t) => {
@@ -330,19 +333,51 @@ exports.getSeriesCatalog = async (req, res, next) => {
             { $match: query },
             ...buildSeriesKeyStages(),
             {
-                $group: {
-                    _id: '$seriesKey',
-                    count: { $sum: 1 }
+                $lookup: {
+                    from: 'mocktestprogress',
+                    let: { testId: '$testId' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$testId', '$$testId'] },
+                                        { $eq: ['$userId', new mongoose.Types.ObjectId(req.user.id)] },
+                                        { $eq: ['$completed', true] }
+                                    ]
+                                }
+                            }
+                        },
+                        { $project: { _id: 1 } },
+                        { $limit: 1 }
+                    ],
+                    as: '_completed'
                 }
             },
-            { $sort: { count: -1, _id: 1 } }
+            {
+                $group: {
+                    _id: '$seriesKey',
+                    count: { $sum: 1 },
+                    completedCount: {
+                        $sum: {
+                            $cond: [
+                                { $gt: [{ $size: { $ifNull: ['$_completed', []] } }, 0] },
+                                1,
+                                0
+                            ]
+                        }
+                    }
+                }
+            },
+            { $sort: { _id: 1 } }
         ]);
 
         res.status(200).json({
             success: true,
             data: rows.map((row) => ({
                 seriesType: row._id || '',
-                count: row.count
+                count: row.count,
+                completedCount: Number(row.completedCount || 0)
             }))
         });
     } catch (error) {
@@ -390,6 +425,7 @@ exports.getSubjects = async (req, res, next) => {
         ]);
 
         let subjects = await buildCountMap(TestSeriesSubject, 'subjectId', rows);
+        subjects = sortByNameAsc(subjects);
         if (!subjects.length) {
             subjects = await TestSeriesSubject.find().sort({ name: 1 }).lean();
         }
@@ -436,6 +472,7 @@ exports.getChapters = async (req, res, next) => {
         ]);
 
         let chapters = await buildCountMap(TestSeriesChapter, 'chapterId', rows);
+        chapters = sortByNameAsc(chapters);
         if (!chapters.length) {
             chapters = await TestSeriesChapter.find({ subjectId: subjectObjectId }).sort({ name: 1 }).lean();
         }
