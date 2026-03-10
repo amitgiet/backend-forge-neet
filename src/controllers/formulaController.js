@@ -46,13 +46,14 @@ const isAllowedImageHost = (hostname = '') => {
     return host.endsWith('.googleusercontent.com');
 };
 
-const buildFormulaImageProxyUrl = (req, imageUrl = '') => {
+const toDirectFormulaImageUrl = (imageUrl = '') => {
     const raw = String(imageUrl || '').trim();
     if (!raw) return raw;
     if (!/drive\.google\.com|googleusercontent\.com/i.test(raw)) return raw;
 
-    const base = `${req.protocol}://${req.get('host')}`;
-    return `${base}${req.baseUrl}/image-proxy?url=${encodeURIComponent(raw)}`;
+    const fileId = extractDriveFileId(raw);
+    if (!fileId) return raw;
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`;
 };
 
 const downloadImageBuffer = (urlString, redirectCount = 0) => new Promise((resolve, reject) => {
@@ -189,7 +190,7 @@ exports.getFormulaCards = async (req, res, next) => {
         const cardsRaw = await FormulaCard.find({ topicTitle }).sort({ position: 1 }).lean();
         const cards = cardsRaw.map((card) => ({
             ...card,
-            imgUrl: buildFormulaImageProxyUrl(req, card.imgUrl)
+            imgUrl: toDirectFormulaImageUrl(card.imgUrl)
         }));
 
         res.status(200).json({
@@ -245,7 +246,7 @@ exports.getTopicProgress = async (req, res, next) => {
             return {
                 ...row,
                 cardId: card?._id || row.cardId,
-                imgUrl: buildFormulaImageProxyUrl(req, card?.imgUrl || '')
+                imgUrl: toDirectFormulaImageUrl(card?.imgUrl || '')
             };
         });
         res.status(200).json({
@@ -269,7 +270,7 @@ exports.getChapterProgressSummary = async (req, res, next) => {
             return {
                 ...row,
                 cardId: card?._id || row.cardId,
-                imgUrl: buildFormulaImageProxyUrl(req, card?.imgUrl || '')
+                imgUrl: toDirectFormulaImageUrl(card?.imgUrl || '')
             };
         });
         res.status(200).json({

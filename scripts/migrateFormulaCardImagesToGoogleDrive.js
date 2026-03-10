@@ -200,7 +200,6 @@ const run = async () => {
     }
 
     const accessToken = await ensureAccessToken();
-    console.log(`Access token: ${accessToken}`);
 
     await mongoose.connect(process.env.MONGODB_URI);
     console.log(`Connected to MongoDB. dryRun=${dryRun}, force=${force}, limit=${limit || 'all'}`);
@@ -313,4 +312,3 @@ run().catch(async (error) => {
     } catch (e) { }
     process.exit(1);
 });
-

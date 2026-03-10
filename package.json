@@ -18,6 +18,8 @@
     "migrate:test-series:single-subject-chapter": "node scripts/remapSingleSubjectSingleChapterFromTestSeriesJson.js",
     "migrate:formula-images:drive": "node scripts/migrateFormulaCardImagesToGoogleDrive.js",
     "migrate:formula-images:drive:dry": "node scripts/migrateFormulaCardImagesToGoogleDrive.js --dry-run",
+    "migrate:mock-pdfs:drive": "node scripts/migrateMockTestPdfsToGoogleDrive.js",
+    "migrate:mock-pdfs:drive:dry": "node scripts/migrateMockTestPdfsToGoogleDrive.js --dry-run",
     "migrate:mock-tests:taxonomy-v2": "node scripts/migrateMockTestsTaxonomyV2.js",
     "migrate:ncert-content-source": "node scripts/normalizeNcertContentSource.js",
     "feed:bio12:english": "node scripts/feedClass12BiologyEnglishUrls.js",
