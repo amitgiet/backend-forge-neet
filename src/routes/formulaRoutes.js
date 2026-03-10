@@ -5,14 +5,18 @@ const {
     getFormulaCards,
     updateCardProgress,
     getTopicProgress,
-    getChapterProgressSummary
+    getChapterProgressSummary,
+    proxyFormulaImage
 } = require('../controllers/formulaController');
 
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Public or Protected depending on requirements. Let's make them protected so only logged-in users access them.
+// Public image proxy for <img src> loading without auth headers
+router.route('/image-proxy').get(proxyFormulaImage);
+
+// Protected formula APIs
 router.use(protect);
 
 router.route('/subjects').get(getFormulaSubjects);
