@@ -3,8 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const MockTest = require('../src/models/MockTest');
+const { syncMockTestTaxonomy } = require('../src/utils/testSeriesTaxonomy');
 
 const DEFAULT_FILE = path.join(__dirname, '..', 'uploads', 'TestSeries.json');
+const KNOWN_INSTITUTIONS = new Set(['Allen', 'Aakash', 'FIITJEE', 'Resonance', 'NTA', 'Custom']);
 
 const coerceStringArray = (value) =>
   Array.isArray(value) ? value.map((v) => String(v)).filter(Boolean) : [];
@@ -43,6 +45,28 @@ const inferOriginalType = (numberOfQuestions) => {
   return 'fulllength-test';
 };
 
+const inferProvider = (record) => {
+  const rawValue = String(record?.provider || record?.institution || record?.institute || '').trim();
+  return rawValue || 'Custom';
+};
+
+const inferInstitution = (provider) => {
+  if (KNOWN_INSTITUTIONS.has(provider)) return provider;
+  return 'Custom';
+};
+
+const inferClassCategory = (testFor = []) => {
+  const values = Array.isArray(testFor) ? testFor.map((v) => String(v).toLowerCase()) : [];
+  const has11 = values.includes('11');
+  const has12 = values.includes('12');
+  const hasDropper = values.includes('dropper');
+  if (hasDropper) return 'dropper';
+  if (has11 && has12) return 'mixed';
+  if (has11) return '11';
+  if (has12) return '12';
+  return 'other';
+};
+
 const normalizeRecord = (record) => {
   const raw = record && typeof record === 'object' ? record : {};
 
@@ -61,6 +85,8 @@ const normalizeRecord = (record) => {
   const unlockDate = toDateOrUndefined(raw.unlockDate);
 
   const originalTestType = String(raw.originalTestType || inferOriginalType(totalQuestions));
+  const provider = inferProvider(raw);
+  const testFor = coerceStringArray(raw.testFor);
 
   const taxonomy = {
     subjectNames: coerceStringArray(raw.subjectNames),
@@ -106,9 +132,9 @@ const normalizeRecord = (record) => {
     startTime: undefined,
     endTime: undefined,
     tags,
-    institution: 'Custom',
+    institution: inferInstitution(provider),
     year: undefined,
-    classCategory: 'other',
+    classCategory: inferClassCategory(testFor),
     seriesType,
     taxonomy,
     resources: {
@@ -127,8 +153,10 @@ const normalizeRecord = (record) => {
       avgTimeSpent: 0
     },
     source: {
+      provider,
+      externalId: testId,
       originalTestType,
-      testFor: coerceStringArray(raw.testFor),
+      testFor,
       isFree: inferAccessType(raw) === 'FREE',
       isHidden: raw.isHidden != null ? Number(raw.isHidden) === 1 : false,
       index: Number.isFinite(Number(raw.index)) ? Number(raw.index) : undefined,
@@ -171,6 +199,8 @@ async function run() {
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
+  let normalized = 0;
+  let normalizationFailed = 0;
 
   for (const item of items) {
     const doc = normalizeRecord(item);
@@ -180,12 +210,38 @@ async function run() {
     }
 
     const existing = await MockTest.findOne({ testId: doc.testId }).select('_id');
+    let persisted = null;
     if (existing) {
       await MockTest.updateOne({ _id: existing._id }, { $set: doc });
+      persisted = await MockTest.findById(existing._id);
       updated += 1;
     } else {
-      await MockTest.create(doc);
+      persisted = await MockTest.create(doc);
       inserted += 1;
+    }
+
+    if (persisted) {
+      try {
+        const patch = await syncMockTestTaxonomy(persisted);
+        await MockTest.updateOne(
+          { _id: persisted._id },
+          {
+            $set: {
+              seriesId: patch.seriesId || null,
+              taxonomyStatus: patch.taxonomyStatus,
+              testSeriesDetails: patch.testSeriesDetails,
+              facets: patch.facets,
+              taxonomy: patch.taxonomy,
+              'source.provider': patch.provider,
+              'source.externalId': persisted.source?.externalId || persisted.testId
+            }
+          }
+        );
+        normalized += 1;
+      } catch (error) {
+        normalizationFailed += 1;
+        console.error(`Normalization failed for ${doc.testId}: ${error.message}`);
+      }
     }
   }
 
@@ -193,6 +249,8 @@ async function run() {
   console.log(`Inserted: ${inserted}`);
   console.log(`Updated: ${updated}`);
   console.log(`Skipped: ${skipped}`);
+  console.log(`Normalized: ${normalized}`);
+  console.log(`Normalization failed: ${normalizationFailed}`);
 
   await mongoose.disconnect();
 }

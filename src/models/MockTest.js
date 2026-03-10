@@ -122,11 +122,14 @@ const MockTestSchema = new mongoose.Schema({
 
     // Imported test-series metadata
     source: {
+        provider: { type: String, default: 'Custom' },
+        externalId: String,
         originalTestType: String,
         testFor: [String], // e.g. ['11','12','dropper','neet24']
         isFree: { type: Boolean, default: true },
         isHidden: { type: Boolean, default: false },
         index: Number,
+        rawRef: { type: mongoose.Schema.Types.ObjectId },
 
         // Preserve the original imported record so we don't lose fields over time
         raw: mongoose.Schema.Types.Mixed
@@ -144,12 +147,26 @@ const MockTestSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    seriesId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'TestSeries'
+    },
 
     // Hierarchical reference links to Normalized Models
     testSeriesDetails: {
         subjectIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesSubject' }],
         chapterIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesChapter' }],
         topicIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesTopic' }]
+    },
+    facets: {
+        subjectIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesSubject' }],
+        chapterIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesChapter' }],
+        topicIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'TestSeriesTopic' }]
+    },
+    taxonomyStatus: {
+        type: String,
+        enum: ['complete', 'partial', 'unmapped'],
+        default: 'unmapped'
     },
 
     // Syllabus/taxonomy metadata imported from uploads/TestSeries.json
@@ -200,11 +217,27 @@ MockTestSchema.index({ tags: 1 });
 MockTestSchema.index({ classCategory: 1, isActive: 1 });
 MockTestSchema.index({ seriesType: 1, isActive: 1 });
 MockTestSchema.index({ 'source.testFor': 1 });
+MockTestSchema.index({ seriesId: 1, isActive: 1 });
+MockTestSchema.index({ institution: 1, seriesType: 1, isActive: 1 });
+MockTestSchema.index({ taxonomyStatus: 1, isActive: 1 });
+MockTestSchema.index(
+    { 'source.provider': 1, 'source.externalId': 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            'source.provider': { $exists: true },
+            'source.externalId': { $exists: true }
+        }
+    }
+);
 
 // Fast-lookup Indexes for the new references
 MockTestSchema.index({ 'testSeriesDetails.subjectIds': 1 });
 MockTestSchema.index({ 'testSeriesDetails.chapterIds': 1 });
 MockTestSchema.index({ 'testSeriesDetails.topicIds': 1 });
+MockTestSchema.index({ 'facets.subjectIds': 1 });
+MockTestSchema.index({ 'facets.chapterIds': 1 });
+MockTestSchema.index({ 'facets.topicIds': 1 });
 
 // Virtual for attempt count
 MockTestSchema.virtual('attempts', {

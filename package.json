@@ -13,6 +13,10 @@
     "seed:pyq-marked-ncert": "node scripts/seedPYQMarkedNCERT.js",
     "seed:ncert-lines:sample": "node scripts/seedSampleNCERTLines.js",
     "import:mock-tests": "node scripts/importMockTestsFromJson.js",
+    "backfill:test-series:chapter-original-id": "node scripts/backfillTestSeriesChapterOriginalId.js",
+    "cleanup:test-series:mixed-duplicates": "node scripts/removeMixedGeneralDuplicateChapters.js",
+    "migrate:test-series:single-subject-chapter": "node scripts/remapSingleSubjectSingleChapterFromTestSeriesJson.js",
+    "migrate:mock-tests:taxonomy-v2": "node scripts/migrateMockTestsTaxonomyV2.js",
     "migrate:ncert-content-source": "node scripts/normalizeNcertContentSource.js",
     "feed:bio12:english": "node scripts/feedClass12BiologyEnglishUrls.js",
     "test": "jest --watchAll --verbose"
