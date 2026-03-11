@@ -121,9 +121,21 @@ class AIAgentService {
 
   detectDeterministicIntent(message) {
     const msg = String(message || '').toLowerCase();
-    if (msg.includes('review my last quiz') || msg.includes('last quiz')) return 'last_quiz_review';
-    if (msg.includes('what should i do today') || msg.includes('what should i study today') || msg.includes('today plan') || msg.includes('plan my day')) return 'today_action_plan';
-    if (msg.includes('suggest') || msg.includes('recommend') || msg.includes('give me') || msg.includes('test me') || (msg.includes('quiz') && (msg.includes(' on ') || msg.includes(' for ')))) return 'quiz_suggestion';
+
+    // Only match "last quiz" if the user is explicitly reviewing it
+    if (msg.includes('review my last quiz') || msg === 'last quiz' || msg.includes('how did i do in my last quiz')) return 'last_quiz_review';
+
+    // Today plan — explicit scheduling intent only
+    if (msg.includes('what should i do today') || msg.includes('what should i study today') || msg.includes('today plan') || msg.includes('plan my day') || msg.includes('build my today plan')) return 'today_action_plan';
+
+    // Quiz suggestion — MUST contain an explicit quiz/test request word.
+    // Generic "give me", "suggest", "recommend" alone are NOT enough — they match too many NEET concept questions.
+    const hasQuizWord = msg.includes('quiz') || msg.includes('test me') || msg.includes('give me a quiz') || msg.includes('give me a test') || msg.includes('start a quiz') || msg.includes('practice quiz') || msg.includes('take a quiz');
+    const hasTopicContext = msg.includes(' on ') || msg.includes(' for ') || msg.includes(' about ') || msg.includes('physics') || msg.includes('chemistry') || msg.includes('biology');
+    if (hasQuizWord && hasTopicContext) return 'quiz_suggestion';
+    // explicit standalone quiz request with no topic context still fires
+    if (msg === 'give me a quiz' || msg === 'give me a test' || msg === 'start a quiz' || msg === 'test me') return 'quiz_suggestion';
+
     return null;
   }
 
