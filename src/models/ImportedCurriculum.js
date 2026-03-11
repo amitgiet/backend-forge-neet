@@ -18,6 +18,25 @@ const TopicSchema = new mongoose.Schema(
     },
     { _id: false }
 );
+const ToppersEssentialsSchema = new mongoose.Schema(
+    {
+        video: {
+            title: { type: String, default: null },
+            url: { type: String, default: null },
+            time: { type: String, default: null }
+        },
+        mindmap: { type: Object, default: null },
+        audio: { type: String, default: null },
+        slidesdeck: {
+            title: { type: String, default: null },
+            url: { type: String, default: null }
+        },
+        report: { type: String, default: null },
+        flashcards: { type: String, default: null },
+        infographic: { type: String, default: null }
+    },
+    { _id: false }
+);
 
 const ImportedCurriculumSchema = new mongoose.Schema(
     {
@@ -42,6 +61,8 @@ const ImportedCurriculumSchema = new mongoose.Schema(
         order: { type: Number, default: 0, index: true },
 
         topics: { type: [TopicSchema], default: [] },
+
+        toppersEssentials: { type: ToppersEssentialsSchema, default: () => ({}) },
     },
     {
         collection: 'importedcurriculum',

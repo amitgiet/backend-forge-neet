@@ -13,6 +13,9 @@ const {
     updateCurriculumRunProgress,
     abandonCurriculumRun,
     submitCurriculumRun,
+    logResource,
+    toggleResourceReaction,
+    getResourceReactions,
 } = require('../controllers/curriculumController');
 
 // All curriculum routes require authentication
@@ -42,5 +45,12 @@ router.get('/questions', getQuestionsByUIDs);
 
 // Track imported curriculum quiz attempt per sub-topic
 router.post('/attempts', trackSubTopicAttempt);
+
+// Log Toppers Corner resource view/engagement
+router.post('/log-resource', logResource);
+
+// Resource reactions for Toppers Corner
+router.post('/toggle-reaction', toggleResourceReaction);
+router.get('/reactions/:chapterId', getResourceReactions);
 
 module.exports = router;

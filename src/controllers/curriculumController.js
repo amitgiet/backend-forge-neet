@@ -1,7 +1,10 @@
 const ImportedCurriculum = require('../models/ImportedCurriculum');
 const ImportedQuestion = require('../models/ImportedQuestion');
 const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
+const ImportedChallenge = require('../models/Challenge');
 const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun');
+const ToppersResourceLog = require('../models/ToppersResourceLog');
+const ToppersResourceReaction = require('../models/ToppersResourceReaction');
 const UserQuestion = require('../models/UserQuestion');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
@@ -176,7 +179,7 @@ exports.getAllChapters = async (req, res) => {
 
         const chapters = await ImportedCurriculum.find(
             { subject: subject.toLowerCase() },
-            { _id: 1, subject: 1, type: 1, isHidden: 1, order: 1 }
+            { _id: 1, subject: 1, type: 1, isHidden: 1, order: 1, toppersEssentials: 1 }
         ).sort({ order: 1 }).lean();
 
         res.json({ success: true, count: chapters.length, data: chapters });
@@ -192,14 +195,14 @@ exports.getTopicsByChapter = async (req, res) => {
 
         const chapter = await ImportedCurriculum.findOne(
             { _id: chapterId, subject: subject.toLowerCase() },
-            { 'topics.topic': 1, 'topics.sub_topics.subTopic': 1 }
+            { 'topics.topic': 1, 'topics.sub_topics.subTopic': 1, toppersEssentials: 1 }
         ).lean();
 
         if (!chapter) {
             return res.status(404).json({ success: false, error: 'Chapter not found' });
         }
 
-        res.json({ success: true, chapterId, data: chapter.topics });
+        res.json({ success: true, chapterId, toppersEssentials: chapter.toppersEssentials, data: chapter.topics });
     } catch (err) {
         console.error('getTopicsByChapter error:', err);
         res.status(500).json({ success: false, error: 'Server error' });
@@ -335,7 +338,7 @@ exports.getSubTopics = async (req, res) => {
             }),
         }));
 
-        res.json({ success: true, chapterId, data: result });
+        res.json({ success: true, chapterId, toppersEssentials: chapter.toppersEssentials, data: result });
     } catch (err) {
         console.error('getSubTopics error:', err);
         res.status(500).json({ success: false, error: 'Server error' });
@@ -763,6 +766,123 @@ exports.getQuestionsByUIDs = async (req, res) => {
         });
     } catch (err) {
         console.error('getQuestionsByUIDs error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+// @desc  Log a Toppers Corner resource view
+// @route POST /api/v1/curriculum/log-resource
+// @access Private
+exports.logResource = async (req, res) => {
+    try {
+        const { chapterId, subject, resourceType, durationSeconds } = req.body;
+
+        if (!chapterId || !resourceType) {
+            return res.status(400).json({ success: false, error: 'chapterId and resourceType are required' });
+        }
+
+        const validTypes = ['video', 'audio', 'slides', 'mindmap', 'report', 'infographic', 'flashcards'];
+        if (!validTypes.includes(resourceType)) {
+            return res.status(400).json({ success: false, error: 'Invalid resourceType' });
+        }
+
+        await ToppersResourceLog.create({
+            userId: req.user._id,
+            chapterId,
+            subject: subject || undefined,
+            resourceType,
+            durationSeconds: Math.max(0, Number(durationSeconds) || 0),
+            viewedAt: new Date(),
+        });
+
+        res.status(201).json({ success: true });
+    } catch (err) {
+        console.error('logResource error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+// @desc  Toggle like/dislike for a Toppers Corner resource
+// @route POST /api/v1/curriculum/toggle-reaction
+// @access Private
+exports.toggleResourceReaction = async (req, res) => {
+    try {
+        const { chapterId, resourceType, reaction } = req.body;
+
+        if (!chapterId || !resourceType || !reaction) {
+            return res.status(400).json({ success: false, error: 'chapterId, resourceType, and reaction are required' });
+        }
+
+        const validTypes = ['video', 'audio', 'slides', 'infographic', 'report', 'mindmap', 'flashcards'];
+        if (!validTypes.includes(resourceType)) {
+            return res.status(400).json({ success: false, error: 'Invalid resourceType' });
+        }
+
+        const validReactions = ['like', 'dislike', 'none'];
+        if (!validReactions.includes(reaction)) {
+            return res.status(400).json({ success: false, error: 'Invalid reaction' });
+        }
+
+        await ToppersResourceReaction.findOneAndUpdate(
+            { userId: req.user._id, chapterId, resourceType },
+            { reaction },
+            { upsert: true, new: true }
+        );
+
+        res.status(200).json({ success: true });
+    } catch (err) {
+        console.error('toggleResourceReaction error:', err);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+
+// @desc  Get aggregated reactions and current user's reactions for a chapter
+// @route GET /api/v1/curriculum/reactions/:chapterId
+// @access Private
+exports.getResourceReactions = async (req, res) => {
+    try {
+        const { chapterId } = req.params;
+
+        // Aggregate total likes and dislikes for the chapter
+        const aggregated = await ToppersResourceReaction.aggregate([
+            { $match: { chapterId } },
+            {
+                $group: {
+                    _id: '$resourceType',
+                    likes: { $sum: { $cond: [{ $eq: ['$reaction', 'like'] }, 1, 0] } },
+                    dislikes: { $sum: { $cond: [{ $eq: ['$reaction', 'dislike'] }, 1, 0] } }
+                }
+            }
+        ]);
+
+        // Get the current user's reactions
+        const userReactionsDoc = await ToppersResourceReaction.find({
+            userId: req.user._id,
+            chapterId
+        }).lean();
+
+        // Format response
+        const reactions = {};
+        
+        aggregated.forEach(agg => {
+            reactions[agg._id] = {
+                likes: agg.likes,
+                dislikes: agg.dislikes,
+                userReaction: 'none'
+            };
+        });
+
+        userReactionsDoc.forEach(ur => {
+            if (!reactions[ur.resourceType]) {
+                reactions[ur.resourceType] = { likes: 0, dislikes: 0, userReaction: 'none' };
+            }
+            reactions[ur.resourceType].userReaction = ur.reaction;
+        });
+
+        res.json({ success: true, data: reactions });
+
+    } catch (err) {
+        console.error('getResourceReactions error:', err);
         res.status(500).json({ success: false, error: 'Server error' });
     }
 };

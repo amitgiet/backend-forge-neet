@@ -118,6 +118,11 @@ const MockTestSchema = new mongoose.Schema({
         enum: ['Allen', 'Aakash', 'FIITJEE', 'Resonance', 'NTA', 'Custom']
     },
 
+    sourceType: {
+        type: String,
+        default: ''
+    },
+
     year: Number, // For PYQ tests
 
     // Imported test-series metadata

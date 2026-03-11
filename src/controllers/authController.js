@@ -2,6 +2,7 @@ const User = require('../models/User');
 const StudySession = require('../models/StudySession');
 const TestAttempt = require('../models/TestAttempt');
 const QuizMeta = require('../models/QuizMeta');
+const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun');
 const Challenge = require('../models/Challenge');
 const ErrorResponse = require('../utils/errorResponse');
 const bcrypt = require('bcryptjs');
@@ -404,7 +405,11 @@ exports.getTodayProgress = async (req, res, next) => {
                     questionsAttempted: 0,
                     correctAnswers: 0,
                     accuracy: 0,
-                    formattedStudyTime: '0m'
+                    formattedStudyTime: '0m',
+                    chaptersCovered: 0,
+                    subjectBreakdown: { biology: 0, chemistry: 0, physics: 0 },
+                    resourcesViewedToday: 0,
+                    topperStudyMinutes: 0,
                 }
             });
         }
@@ -416,7 +421,11 @@ exports.getTodayProgress = async (req, res, next) => {
         const endOfDay = new Date();
         endOfDay.setHours(23, 59, 59, 999);
 
-        const [sessionAgg, testAgg, generatedQuizAgg] = await Promise.all([
+        // Try to load resource log model (will exist after Phase 2)
+        let ToppersResourceLog;
+        try { ToppersResourceLog = require('../models/ToppersResourceLog'); } catch (_) { }
+
+        const [sessionAgg, testAgg, generatedQuizAgg, curriculumAgg, curriculumSubjectAgg, resourceAgg] = await Promise.all([
             StudySession.aggregate([
                 {
                     $match: {
@@ -467,19 +476,83 @@ exports.getTodayProgress = async (req, res, next) => {
                         studyTimeSeconds: { $sum: { $ifNull: ['$attempts.timeTaken', 0] } }
                     }
                 }
-            ])
+            ]),
+            // Curriculum browser quiz runs – totals
+            ImportedCurriculumQuizRun.aggregate([
+                {
+                    $match: {
+                        userId,
+                        status: 'submitted',
+                        submittedAt: { $gte: startOfDay, $lte: endOfDay }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        questionsAttempted: { $sum: { $ifNull: ['$totalQuestions', 0] } },
+                        correctAnswers: { $sum: { $ifNull: ['$correctAnswers', 0] } },
+                        elapsedSeconds: { $sum: { $ifNull: ['$elapsedSeconds', 0] } },
+                        chaptersCovered: { $addToSet: '$chapterId' }
+                    }
+                }
+            ]),
+            // Curriculum browser quiz runs – per subject breakdown
+            ImportedCurriculumQuizRun.aggregate([
+                {
+                    $match: {
+                        userId,
+                        status: 'submitted',
+                        submittedAt: { $gte: startOfDay, $lte: endOfDay }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$subject',
+                        questionsAttempted: { $sum: { $ifNull: ['$totalQuestions', 0] } }
+                    }
+                }
+            ]),
+            // Toppers resource log (optional – only if model exists)
+            ToppersResourceLog
+                ? ToppersResourceLog.aggregate([
+                    {
+                        $match: {
+                            userId,
+                            viewedAt: { $gte: startOfDay, $lte: endOfDay }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            count: { $sum: 1 },
+                            totalSeconds: { $sum: { $ifNull: ['$durationSeconds', 0] } }
+                        }
+                    }
+                ])
+                : Promise.resolve([]),
         ]);
 
         const sessionData = sessionAgg[0] || { studyTimeMinutes: 0, questionsAttempted: 0 };
         const testData = testAgg[0] || { questionsAttempted: 0, correctAnswers: 0, studyTimeSeconds: 0 };
         const generatedData = generatedQuizAgg[0] || { questionsAttempted: 0, correctAnswers: 0, studyTimeSeconds: 0 };
+        const currData = curriculumAgg[0] || { questionsAttempted: 0, correctAnswers: 0, elapsedSeconds: 0, chaptersCovered: [] };
+        const resourceData = resourceAgg[0] || { count: 0, totalSeconds: 0 };
+
+        // Subject breakdown from curriculum runs
+        const subjectBreakdown = { biology: 0, chemistry: 0, physics: 0 };
+        curriculumSubjectAgg.forEach(s => {
+            if (s._id && subjectBreakdown[s._id] !== undefined) {
+                subjectBreakdown[s._id] = s.questionsAttempted;
+            }
+        });
 
         const studyTimeMinutes = Math.max(
             0,
             Math.round(
                 Number(sessionData.studyTimeMinutes || 0) +
                 Number(testData.studyTimeSeconds || 0) / 60 +
-                Number(generatedData.studyTimeSeconds || 0) / 60
+                Number(generatedData.studyTimeSeconds || 0) / 60 +
+                Number(currData.elapsedSeconds || 0) / 60
             )
         );
 
@@ -487,17 +560,24 @@ exports.getTodayProgress = async (req, res, next) => {
             0,
             Number(sessionData.questionsAttempted || 0) +
             Number(testData.questionsAttempted || 0) +
-            Number(generatedData.questionsAttempted || 0)
+            Number(generatedData.questionsAttempted || 0) +
+            Number(currData.questionsAttempted || 0)
         );
 
         const correctAnswers = Math.max(
             0,
             Number(testData.correctAnswers || 0) +
-            Number(generatedData.correctAnswers || 0)
+            Number(generatedData.correctAnswers || 0) +
+            Number(currData.correctAnswers || 0)
         );
 
-        const accuracyBase = Number(testData.questionsAttempted || 0) + Number(generatedData.questionsAttempted || 0);
+        const accuracyBase =
+            Number(testData.questionsAttempted || 0) +
+            Number(generatedData.questionsAttempted || 0) +
+            Number(currData.questionsAttempted || 0);
         const accuracy = accuracyBase > 0 ? Math.round((correctAnswers / accuracyBase) * 100) : 0;
+
+        const topperStudyMinutes = Math.round(Number(resourceData.totalSeconds || 0) / 60);
 
         res.status(200).json({
             success: true,
@@ -507,13 +587,18 @@ exports.getTodayProgress = async (req, res, next) => {
                 questionsAttempted,
                 correctAnswers,
                 accuracy,
-                formattedStudyTime: formatMinutes(studyTimeMinutes)
+                formattedStudyTime: formatMinutes(studyTimeMinutes),
+                chaptersCovered: (currData.chaptersCovered || []).length,
+                subjectBreakdown,
+                resourcesViewedToday: resourceData.count || 0,
+                topperStudyMinutes,
             }
         });
     } catch (error) {
         next(error);
     }
 };
+
 
 // @desc    Get today's quest progress for dashboard card
 // @route   GET /api/v1/auth/today-quest
