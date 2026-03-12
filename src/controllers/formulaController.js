@@ -224,6 +224,15 @@ exports.updateCardProgress = async (req, res, next) => {
             { new: true, upsert: true }
         );
 
+        if (status === 'memorized') {
+            const UserActivityService = require('../services/userActivityService');
+            await UserActivityService.logActivity(req.user.id, 'formula_memorized', {
+                cardId,
+                chapterTitle: progress.chapterTitle,
+                topicTitle: progress.topicTitle
+            });
+        }
+
         res.status(200).json({
             success: true,
             data: progress

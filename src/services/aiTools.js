@@ -10,10 +10,12 @@ const QuizMeta = require('../models/QuizMeta');
 const ImportedCurriculum = require('../models/ImportedCurriculum');
 const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
 const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun');
+const ImportedQuestion = require('../models/ImportedQuestion');
 const MockTest = require('../models/MockTest');
 const MockTestProgress = require('../models/MockTestProgress');
 const QuizFactoryService = require('./quizFactoryService');
 const GeminiService = require('./geminiService');
+const UserActivityService = require('./userActivityService');
 
 class AITools {
     // Performance Analysis Tools
@@ -499,6 +501,107 @@ class AITools {
             longestStreak: user?.gamification?.longestStreak || 0,
             lastStudyDate: user?.gamification?.lastStudyDate
         };
+    }
+
+    static async getCurrentStudyFlow(userId, days = 7) {
+        return await UserActivityService.getUserTimeline(userId, 20, days);
+    }
+
+    static isImportedAnswerCorrect(question, selectedIndex) {
+        if (!question || !Number.isInteger(selectedIndex) || selectedIndex < 0) return false;
+
+        const optionIndexToKey = (index) => String.fromCharCode(65 + Number(index));
+        const selectedKey = optionIndexToKey(selectedIndex);
+        const correctOption = String(question.correct_option || '').trim().toUpperCase();
+        
+        if (['A', 'B', 'C', 'D'].includes(correctOption)) {
+            return selectedKey === correctOption;
+        }
+
+        const selectedText = String(question.options?.[selectedKey] || '').trim().toLowerCase();
+        const correctText = String(question.correct_answer || '').trim().toLowerCase();
+        if (!selectedText || !correctText) return false;
+        return selectedText === correctText;
+    }
+
+    static async getLastCurriculumAttempt(userId) {
+        // Find the most recent submitted run first as it has the specific answers
+        const run = await ImportedCurriculumQuizRun.findOne({ 
+            userId, 
+            status: 'submitted' 
+        })
+        .sort({ submittedAt: -1 })
+        .lean();
+
+        if (run) {
+            const questions = await this.getImportedQuestionsByUIDs(run.uids);
+            const wrongQuestions = [];
+            const wrongUids = [];
+
+            run.uids.forEach((uid, index) => {
+                const q = questions.find(question => String(question.questionId) === String(uid));
+                const answerIndex = run.answers[index];
+                
+                if (q && !this.isImportedAnswerCorrect(q, answerIndex)) {
+                    wrongUids.push(uid);
+                    wrongQuestions.push({
+                        uid,
+                        text: q.question,
+                        yourAnswer: answerIndex !== null && answerIndex >= 0 ? String.fromCharCode(65 + answerIndex) : 'Not Answered',
+                        correctAnswer: q.correct_option || q.correct_answer
+                    });
+                }
+            });
+
+            return {
+                date: run.submittedAt || run.updatedAt,
+                subject: run.subject,
+                chapter: run.chapterId,
+                topic: run.topic,
+                subTopic: run.subTopic,
+                mode: run.mode,
+                score: run.correctAnswers,
+                total: run.totalQuestions,
+                percentage: run.percentage,
+                timeTaken: run.elapsedSeconds,
+                questionIds: run.uids,
+                wrongUids,
+                wrongQuestions // Providing some context directly to help the agent
+            };
+        }
+
+        // Fallback to basic effort tracking if no run doc found (legacy or manual track)
+        const attempt = await ImportedSubtopicAttempt.findOne({ userId })
+            .sort({ attemptedAt: -1 })
+            .lean();
+        
+        if (!attempt) return null;
+
+        return {
+            date: attempt.attemptedAt,
+            subject: attempt.subject,
+            chapter: attempt.chapterId,
+            topic: attempt.topic,
+            subTopic: attempt.subTopic,
+            mode: attempt.mode,
+            score: attempt.correctAnswers,
+            total: attempt.totalQuestions,
+            percentage: attempt.percentage,
+            timeTaken: attempt.timeTaken,
+            questionIds: attempt.uids,
+            isFallback: true
+        };
+    }
+
+    static async getImportedQuestionsByUIDs(uids = []) {
+        const uidList = Array.isArray(uids) ? uids.map((u) => String(u)).filter(Boolean) : [];
+        if (uidList.length === 0) return [];
+        const questionDocs = await ImportedQuestion.find({ questionId: { $in: uidList } }).lean();
+        const questionMap = {};
+        questionDocs.forEach((q) => {
+            questionMap[String(q.questionId)] = q;
+        });
+        return uidList.map((uid) => questionMap[uid]).filter(Boolean);
     }
 
     // Insights

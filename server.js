@@ -183,6 +183,7 @@ app.use(`/api/${API_VERSION}/doubts`, require('./src/routes/doubtRoutes'));
 app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionFilterRoutes'));
 app.use(`/api/${API_VERSION}/formulas`, require('./src/routes/formulaRoutes'));
 app.use(`/api/${API_VERSION}/test-series`, require('./src/routes/testSeriesRoutes'));
+app.use(`/api/${API_VERSION}/activities`, require('./src/routes/userActivityRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

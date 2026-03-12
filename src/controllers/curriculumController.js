@@ -622,6 +622,17 @@ exports.submitCurriculumRun = async (req, res) => {
             console.warn('[submitCurriculumRun] NeuronZ enroll failed (non-blocking):', enrollErr.message);
         }
 
+        const UserActivityService = require('../services/userActivityService');
+        await UserActivityService.logActivity(req.user.id, 'curriculum_topic_completed', {
+            subject: run.subject,
+            chapterId: run.chapterId,
+            topic: run.topic,
+            subTopic: run.subTopic,
+            percentage: score.percentage,
+            correctAnswers: score.correctAnswers,
+            totalQuestions: score.totalQuestions
+        });
+
         res.status(200).json({
             success: true,
             data: {

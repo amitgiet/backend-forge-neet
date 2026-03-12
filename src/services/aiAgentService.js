@@ -42,7 +42,9 @@ const DECLARATIONS = [
   ['getMockTestCompletionSummary', 'Get mock completion summary', { examType: { type: 'string' }, testType: { type: 'string' }, classCategory: { type: 'string' }, freeOnly: { type: 'boolean' } }],
   ['getMockPendingTests', 'Get pending mock tests', { limit: { type: 'number' }, examType: { type: 'string' }, testType: { type: 'string' }, classCategory: { type: 'string' }, freeOnly: { type: 'boolean' } }],
   ['getCombinedPerformanceTrend', 'Get combined trend across quiz/curriculum/tests', { days: { type: 'number' } }],
-  ['buildTodayActionPlan', 'Build prioritized study action plan for today', { timeBudgetMinutes: { type: 'number' }, maxTasks: { type: 'number' } }]
+  ['buildTodayActionPlan', 'Build prioritized study action plan for today', { timeBudgetMinutes: { type: 'number' }, maxTasks: { type: 'number' } }],
+  ['getLastCurriculumAttempt', 'Get results of the most recent imported curriculum topic quiz/test', {}],
+  ['getImportedQuestionsByUIDs', 'Get content/details of curriculum questions by their numeric IDs', { uids: { type: 'array', items: { type: 'number' } } }, ['uids']]
 ];
 
 class AIAgentService {
@@ -113,7 +115,10 @@ class AIAgentService {
       getMockTestCompletionSummary: () => AITools.getMockTestCompletionSummary(userId, args || {}),
       getMockPendingTests: () => AITools.getMockPendingTests(userId, args.limit, args || {}),
       getCombinedPerformanceTrend: () => AITools.getCombinedPerformanceTrend(userId, args.days),
-      buildTodayActionPlan: () => AITools.buildTodayActionPlan(userId, args.timeBudgetMinutes, args.maxTasks)
+      buildTodayActionPlan: () => AITools.buildTodayActionPlan(userId, args.timeBudgetMinutes, args.maxTasks),
+      getCurrentStudyFlow: () => AITools.getCurrentStudyFlow(userId, args.days),
+      getLastCurriculumAttempt: () => AITools.getLastCurriculumAttempt(userId),
+      getImportedQuestionsByUIDs: () => AITools.getImportedQuestionsByUIDs(args.uids)
     };
     if (!map[normalizedToolName]) throw new Error(`Unknown tool: ${toolName}`);
     return this.withTimeout(map[normalizedToolName](), 5000);
@@ -123,7 +128,7 @@ class AIAgentService {
     const msg = String(message || '').toLowerCase();
 
     // Only match "last quiz" if the user is explicitly reviewing it
-    if (msg.includes('review my last quiz') || msg === 'last quiz' || msg.includes('how did i do in my last quiz')) return 'last_quiz_review';
+    if (msg.includes('review my last quiz') || msg === 'last quiz' || msg.includes('how did i do in my last quiz') || msg.includes('review my last curriculum')) return 'last_quiz_review';
 
     // Today plan — explicit scheduling intent only
     if (msg.includes('what should i do today') || msg.includes('what should i study today') || msg.includes('today plan') || msg.includes('plan my day') || msg.includes('build my today plan')) return 'today_action_plan';
@@ -295,6 +300,34 @@ class AIAgentService {
             toolErrors.push('getLastQuizDetailed failed');
           }
         }
+        if (typeof AITools.getLastCurriculumAttempt === 'function') {
+          try {
+            const curriculumLast = await AITools.getLastCurriculumAttempt(userId);
+            if (curriculumLast && (!summary || new Date(curriculumLast.date) > new Date(summary.meta?.date))) {
+              summary = { 
+                meta: { 
+                  quizId: 'curriculum-' + curriculumLast.topic, 
+                  subject: curriculumLast.subject, 
+                  topic: curriculumLast.topic, 
+                  subTopic: curriculumLast.subTopic,
+                  chapterId: curriculumLast.chapter, 
+                  date: curriculumLast.date, 
+                  score: curriculumLast.score, 
+                  total: curriculumLast.total, 
+                  percentage: curriculumLast.percentage, 
+                  timeTaken: curriculumLast.timeTaken 
+                },
+                wrongUids: curriculumLast.wrongUids || [],
+                wrongQuestions: curriculumLast.wrongQuestions || [],
+                isCurriculum: true
+              };
+              toolsUsed.push('getLastCurriculumAttempt');
+            }
+          } catch {
+            toolErrors.push('getLastCurriculumAttempt failed');
+          }
+        }
+        
         if (!summary) {
           const last = await AITools.getLastQuiz(userId, 1);
           toolsUsed.push('getLastQuiz');

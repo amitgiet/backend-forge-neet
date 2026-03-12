@@ -53,6 +53,14 @@ exports.endSession = async (req, res, next) => {
 
         await user.save();
 
+        const UserActivityService = require('../services/userActivityService');
+        await UserActivityService.logActivity(req.user.id, 'session_completed', {
+            sessionId: session._id,
+            subject: session.subject,
+            duration: session.duration,
+            questionsSolved: session.questionsSolved
+        });
+
         res.status(200).json({
             success: true,
             data: session

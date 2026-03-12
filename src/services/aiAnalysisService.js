@@ -506,7 +506,8 @@ AIAnalysisService.prototype.buildLastQuizPrompt = function (summary) {
     const dateString = meta.date ? new Date(meta.date).toLocaleString() : 'Unknown';
 
     return `You are a NEET performance coach.
-Given this JSON about a student's last AI-generated quiz, explain their performance and weak areas, and suggest concrete next steps.
+Given this JSON about a student's last ${meta.isCurriculum ? 'official imported curriculum' : 'AI-generated'} quiz, explain their performance and weak areas, and suggest concrete next steps.
+${meta.isCurriculum ? '\nNOTE: This was an official curriculum checkpoint, so its accuracy is a strong indicator of syllabus mastery.\n' : ''}
 
 Student's last quiz (metadata):
 - Subject: ${meta.subject || 'Unknown'}

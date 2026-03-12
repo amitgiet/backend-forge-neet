@@ -237,6 +237,15 @@ exports.submitTestAttempt = async (req, res, next) => {
 
         await user.save();
 
+        const UserActivityService = require('../services/userActivityService');
+        await UserActivityService.logActivity(req.user.id, 'mock_test_submitted', {
+            attemptId: attempt._id,
+            testId: attempt.testId,
+            timeSpent: attempt.timeSpent,
+            marksObtained: attempt.score?.marksObtained || 0,
+            percentage: attempt.score?.percentage || 0
+        });
+
         res.status(200).json({
             success: true,
             data: attempt
