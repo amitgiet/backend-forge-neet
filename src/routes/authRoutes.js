@@ -23,8 +23,9 @@ const router = express.Router();
 // Public routes
 router.post('/register', register);
 router.post('/login', login);
-router.post('/send-otp', sendSignupOtp);
-router.post('/verify-otp', verifyOtp);
+// OTP flow temporarily disabled:
+// router.post('/send-otp', sendSignupOtp);
+// router.post('/verify-otp', verifyOtp);
 router.post('/otp/send', sendOtp);
 router.post('/otp/verify', verifyOtpLogin);
 
