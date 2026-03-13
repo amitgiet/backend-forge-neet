@@ -59,12 +59,26 @@ exports.register = async (req, res, next) => {
             });
         }
 
+        let isPhoneVerified = false;
+        if (phone) {
+            const { consumeVerifiedPhone } = require('../auth/otp.service');
+            isPhoneVerified = await consumeVerifiedPhone(phone);
+
+            if (!isPhoneVerified) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Phone number is not verified'
+                });
+            }
+        }
+
         // Create user
         const user = await User.create({
             name,
             email,
             password,
             phone,
+            isPhoneVerified,
             primaryExam: primaryExam || 'NEET_UG',
             exams: [{
                 examType: primaryExam || 'NEET_UG',

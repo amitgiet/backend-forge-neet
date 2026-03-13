@@ -1,0 +1,214 @@
+[
+    {
+        "id": "DIVERSITY IN LIVING WORLD",
+        "value": {
+            "name": "The Living World",
+            "children": [
+                {
+                    "name": "Characteristics of Life",
+                    "children": [
+                        {
+                            "name": "Growth (Mass/Number)"
+                        },
+                        {
+                            "name": "Reproduction (Sexual/Asexual)"
+                        },
+                        {
+                            "name": "Metabolism (Biochemical Reactions)"
+                        },
+                        {
+                            "name": "Cellular Organisation"
+                        },
+                        {
+                            "name": "Consciousness (Response to Stimuli)"
+                        },
+                        {
+                            "name": "Adaptation and Evolution"
+                        }
+                    ]
+                },
+                {
+                    "name": "Diversity and Taxonomy",
+                    "children": [
+                        {
+                            "name": "Systematics",
+                            "children": [
+                                {
+                                    "name": "Identification"
+                                },
+                                {
+                                    "name": "Nomenclature (Binomial)"
+                                },
+                                {
+                                    "name": "Classification"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Taxonomic Hierarchy",
+                            "children": [
+                                {
+                                    "name": "Kingdom"
+                                },
+                                {
+                                    "name": "Phylum/Division"
+                                },
+                                {
+                                    "name": "Class"
+                                },
+                                {
+                                    "name": "Order"
+                                },
+                                {
+                                    "name": "Family"
+                                },
+                                {
+                                    "name": "Genus"
+                                },
+                                {
+                                    "name": "Species"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Taxonomic Aids",
+                            "children": [
+                                {
+                                    "name": "Herbarium (Dried Specimens)"
+                                },
+                                {
+                                    "name": "Botanical Gardens (Living Plants)"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "Plant Kingdom",
+                    "children": [
+                        {
+                            "name": "Algae",
+                            "children": [
+                                {
+                                    "name": "Chlorophyceae (Green)"
+                                },
+                                {
+                                    "name": "Phaeophyceae (Brown)"
+                                },
+                                {
+                                    "name": "Rhodophyceae (Red)"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Bryophytes",
+                            "children": [
+                                {
+                                    "name": "Liverworts (Marchantia)"
+                                },
+                                {
+                                    "name": "Mosses (Sphagnum, Funaria)"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Pteridophytes (Ferns, Horsetails)"
+                        },
+                        {
+                            "name": "Gymnosperms (Naked Seeds)"
+                        },
+                        {
+                            "name": "Angiosperms (Flowering Plants)"
+                        }
+                    ]
+                },
+                {
+                    "name": "Animal Kingdom",
+                    "children": [
+                        {
+                            "name": "Basis of Classification",
+                            "children": [
+                                {
+                                    "name": "Levels of Organisation"
+                                },
+                                {
+                                    "name": "Symmetry (Radial/Bilateral)"
+                                },
+                                {
+                                    "name": "Coelom (Body Cavity)"
+                                },
+                                {
+                                    "name": "Germ Layers (Diplo/Triploblastic)"
+                                },
+                                {
+                                    "name": "Segmentation (Metamerism)"
+                                },
+                                {
+                                    "name": "Notochord"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Major Phyla",
+                            "children": [
+                                {
+                                    "name": "Porifera (Sponges)"
+                                },
+                                {
+                                    "name": "Coelenterata (Cnidaria)"
+                                },
+                                {
+                                    "name": "Platyhelminthes (Flatworms)"
+                                },
+                                {
+                                    "name": "Aschelminthes (Roundworms)"
+                                },
+                                {
+                                    "name": "Annelida (Segmented Worms)"
+                                },
+                                {
+                                    "name": "Arthropoda (Largest Phylum)"
+                                },
+                                {
+                                    "name": "Mollusca (Soft Bodied)"
+                                },
+                                {
+                                    "name": "Echinodermata (Spiny Skin)"
+                                },
+                                {
+                                    "name": "Hemichordata"
+                                },
+                                {
+                                    "name": "Chordata",
+                                    "children": [
+                                        {
+                                            "name": "Cyclostomata"
+                                        },
+                                        {
+                                            "name": "Chondrichthyes (Cartilage Fish)"
+                                        },
+                                        {
+                                            "name": "Osteichthyes (Bony Fish)"
+                                        },
+                                        {
+                                            "name": "Amphibia"
+                                        },
+                                        {
+                                            "name": "Reptilia"
+                                        },
+                                        {
+                                            "name": "Aves (Birds)"
+                                        },
+                                        {
+                                            "name": "Mammalia"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+]

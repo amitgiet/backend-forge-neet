@@ -22,6 +22,7 @@ connectDB();
 // Initialize app
 const app = express();
 const server = http.createServer(app);
+const API_VERSION = process.env.API_VERSION || 'v1';
 const io = socketIo(server, {
     cors: {
         origin: process.env.NODE_ENV === 'production'
@@ -40,6 +41,9 @@ socketService.initialize();
 app.set('io', io);
 
 // ============ MIDDLEWARE ============
+
+// Razorpay webhook requires raw body for signature verification.
+app.use(`/api/${API_VERSION}/billing/webhook/razorpay`, express.raw({ type: 'application/json' }));
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
@@ -155,8 +159,6 @@ app.get('/health', (req, res) => {
 });
 
 // Mount routers
-const API_VERSION = process.env.API_VERSION || 'v1';
-
 app.use(`/api/${API_VERSION}/auth`, require('./src/routes/authRoutes'));
 app.use(`/api/${API_VERSION}/analyze`, require('./src/routes/analyzeRoutes'));
 app.use(`/api/${API_VERSION}/mocks`, require('./src/routes/mockRoutes'));
@@ -184,6 +186,7 @@ app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionFilterRou
 app.use(`/api/${API_VERSION}/formulas`, require('./src/routes/formulaRoutes'));
 app.use(`/api/${API_VERSION}/test-series`, require('./src/routes/testSeriesRoutes'));
 app.use(`/api/${API_VERSION}/activities`, require('./src/routes/userActivityRoutes'));
+app.use(`/api/${API_VERSION}/billing`, require('./src/routes/billingRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

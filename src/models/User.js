@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const UserSchema = new mongoose.Schema({
     // Basic Information
@@ -92,7 +93,13 @@ const UserSchema = new mongoose.Schema({
         startDate: { type: Date },
         endDate: { type: Date },
         stripeCustomerId: { type: String },
-        stripeSubscriptionId: { type: String }
+        stripeSubscriptionId: { type: String },
+        currentPeriodStart: { type: Date },
+        currentPeriodEnd: { type: Date },
+        lastPaymentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'SubscriptionPayment'
+        }
     },
 
     // Gamification
@@ -201,6 +208,24 @@ const UserSchema = new mongoose.Schema({
         default: false
     },
 
+    isPhoneVerified: {
+        type: Boolean,
+        default: false
+    },
+
+    referralCode: {
+        type: String,
+        unique: true,
+        sparse: true,
+        uppercase: true
+    },
+
+    referredByCode: {
+        type: String,
+        default: null,
+        uppercase: true
+    },
+
     emailVerificationToken: String,
 
     lastLoginAt: Date
@@ -217,14 +242,20 @@ UserSchema.index({ 'exams.examType': 1 });
 UserSchema.index({ 'subscription.plan': 1 });
 UserSchema.index({ 'gamification.totalXP': -1 });
 UserSchema.index({ 'progress.chapterId': 1 });
+UserSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
 
 // Hash password before saving
 UserSchema.pre('save', async function (next) {
+    if (this.isNew && !this.referralCode) {
+        this.referralCode = `NF${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    }
+
     if (!this.isModified('password')) {
-        next();
+        return next();
     }
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
+    return next();
 });
 
 // Method to compare passwords

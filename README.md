@@ -117,12 +117,22 @@ JWT_COOKIE_EXPIRE=7
 OPENAI_API_KEY=sk-your-key
 ENABLE_AI_ANALYSIS=true
 
+# Fast2SMS (for phone OTP)
+FAST2SMS_API_KEY=your_fast2sms_api_key
+
 # Frontend
 FRONTEND_URL=http://localhost:3000
 
 # Stripe (for subscriptions)
 STRIPE_SECRET_KEY=sk_test_your_key
 STRIPE_PRO_PRICE_ID=price_your_id
+
+# Razorpay Billing
+RAZORPAY_KEY_ID=rzp_test_xxxxx
+RAZORPAY_KEY_SECRET=your_razorpay_secret
+RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
+PRO_MONTHLY_PRICE_PAISE=14900
+REFERRAL_REWARD_DAYS=7
 ```
 
 ## 📡 API Endpoints
@@ -132,10 +142,26 @@ STRIPE_PRO_PRICE_ID=price_your_id
 ```
 POST   /api/v1/auth/register     - Register new user
 POST   /api/v1/auth/login        - Login
+POST   /api/v1/auth/send-otp     - Send signup OTP to phone
+POST   /api/v1/auth/verify-otp   - Verify phone OTP
 GET    /api/v1/auth/me           - Get current user
 GET    /api/v1/auth/dashboard    - Dashboard stats
 PUT    /api/v1/auth/profile      - Update profile
 POST   /api/v1/auth/exams        - Add exam to profile
+
+### Billing (Razorpay)
+
+```
+POST   /api/v1/billing/checkout/initiate          - Create order for Pro monthly
+POST   /api/v1/billing/checkout/verify            - Verify Razorpay checkout signature
+POST   /api/v1/billing/coupons/validate           - Validate coupon and preview price
+GET    /api/v1/billing/subscription/status        - Get current subscription status
+POST   /api/v1/billing/webhook/razorpay           - Webhook callback endpoint
+POST   /api/v1/billing/admin/coupons              - Create coupon (temporary ultimate-only)
+PATCH  /api/v1/billing/admin/coupons/:id          - Update coupon
+GET    /api/v1/billing/admin/coupons              - List coupons
+POST   /api/v1/billing/admin/coupons/:id/disable  - Disable coupon
+```
 ```
 
 ### Weakness Analysis
