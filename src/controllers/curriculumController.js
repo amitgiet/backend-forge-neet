@@ -713,6 +713,20 @@ exports.trackSubTopicAttempt = async (req, res) => {
             attemptedAt: new Date(),
         });
 
+        // Ensure curriculum attempts also feed NeuronZ enrollment.
+        try {
+            const normalizedUids = Array.isArray(uids) ? uids.map(Number).filter(Number.isFinite) : [];
+            const syntheticAnswers = normalizedUids.map(() => 0); // mark as attempted for enroll path
+            await enrollQuestionsInNeuronZ(req.user.id, normalizedUids, syntheticAnswers, {
+                subject: normalizedSubject,
+                chapterId: normalizedChapterId,
+                topic: normalizedTopic,
+                subTopic: normalizedSubTopic,
+            });
+        } catch (enrollErr) {
+            console.warn('[trackSubTopicAttempt] NeuronZ enroll failed (non-blocking):', enrollErr.message);
+        }
+
         res.status(201).json({
             success: true,
             data: {

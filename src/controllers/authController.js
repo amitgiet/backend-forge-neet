@@ -7,6 +7,7 @@ const Challenge = require('../models/Challenge');
 const ErrorResponse = require('../utils/errorResponse');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
+const { ensureReferralForUser } = require('../services/referral.service');
 
 const crypto = require('crypto');
 
@@ -141,6 +142,17 @@ exports.login = async (req, res, next) => {
 exports.getMe = async (req, res, next) => {
     try {
         const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        // Backfill referral code for legacy users who signed up before referral rollout.
+        if (!user.referralCode) {
+            await ensureReferralForUser(user);
+        }
 
         res.status(200).json({
             success: true,

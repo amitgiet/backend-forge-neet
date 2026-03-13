@@ -4,6 +4,7 @@ const UserLine = require('../models/UserLine');
 const NCERTLine = require('../models/NCERTLine');
 const Chapter = require('../models/Chapter');
 const User = require('../models/User');
+const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
 const mongoose = require('mongoose');
 
 /**
@@ -30,18 +31,48 @@ class NeuronzService {
         7: 'Mastered 🔒',
     };
 
+    static async backfillFromCurriculumAttemptsIfEmpty(userId) {
+        const trackedCount = await UserQuestion.countDocuments({ userId: new mongoose.Types.ObjectId(userId) });
+        if (trackedCount > 0) return;
+
+        const attempts = await ImportedSubtopicAttempt.find(
+            { userId: new mongoose.Types.ObjectId(userId) },
+            { subject: 1, chapterId: 1, topic: 1, subTopic: 1, uids: 1 }
+        )
+            .sort({ attemptedAt: -1 })
+            .limit(100)
+            .lean();
+
+        for (const attempt of attempts) {
+            const uids = Array.isArray(attempt.uids) ? attempt.uids.map((u) => String(u)).filter(Boolean) : [];
+            if (uids.length === 0) continue;
+
+            await UserQuestion.bulkEnroll(userId, uids, {
+                subject: attempt.subject || null,
+                chapterId: attempt.chapterId || null,
+                topic: attempt.topic || null,
+                subTopic: attempt.subTopic || null,
+            });
+        }
+    }
+
     /**
      * Get all questions due today, grouped by level (L1–L7).
      * A question is "due" when nextRevision <= end of today.
      */
     static async getDueQuestions(userId) {
+        await this.backfillFromCurriculumAttemptsIfEmpty(userId);
+
         const endOfToday = new Date();
         endOfToday.setHours(23, 59, 59, 999);
 
         const dueUserQuestions = await UserQuestion.find({
             userId: new mongoose.Types.ObjectId(userId),
-            nextRevision: { $lte: endOfToday },
             level: { $gte: 1, $lte: 7 },
+            $or: [
+                { nextRevision: { $lte: endOfToday } },
+                { level: 1, totalAttempts: 0 }
+            ]
         }).sort({ level: 1, nextRevision: 1 }).lean();
 
         // Group by level
@@ -79,13 +110,18 @@ class NeuronzService {
      * Returns questions that are due (nextRevision <= now) for this level.
      */
     static async getLevelQuestions(userId, level, limit = 50) {
+        await this.backfillFromCurriculumAttemptsIfEmpty(userId);
+
         const endOfToday = new Date();
         endOfToday.setHours(23, 59, 59, 999);
 
         const userQuestions = await UserQuestion.find({
             userId: new mongoose.Types.ObjectId(userId),
             level: Number(level),
-            nextRevision: { $lte: endOfToday },
+            $or: [
+                { nextRevision: { $lte: endOfToday } },
+                { level: 1, totalAttempts: 0 }
+            ]
         }).sort({ nextRevision: 1 }).limit(limit).lean();
 
         if (userQuestions.length === 0) return { questions: [], userQuestions: [] };
@@ -166,7 +202,10 @@ class NeuronzService {
         const masteredCount = await UserQuestion.countDocuments({ userId, isMastered: true });
         const dueCount = await UserQuestion.countDocuments({
             userId,
-            nextRevision: { $lte: new Date() },
+            $or: [
+                { nextRevision: { $lte: new Date() } },
+                { level: 1, totalAttempts: 0 }
+            ]
         });
 
         return {
