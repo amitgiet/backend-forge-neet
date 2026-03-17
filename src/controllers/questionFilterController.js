@@ -26,6 +26,7 @@ const MAX_PAGE_SIZE = 100;
 function buildFilterQuery(params) {
     const {
         subject, chapterId, subTopic, topic,
+        chapterIds, subTopics, topics,
         difficulty, isPYQ, pyqYear, pyqExam,
         search, isActive = true,
     } = params;
@@ -38,15 +39,21 @@ function buildFilterQuery(params) {
         query.subject = String(subject).toLowerCase();
     }
 
-    if (chapterId) {
+    if (Array.isArray(chapterIds)) {
+        query.chapterId = { $in: chapterIds.map(id => String(id).trim()) };
+    } else if (chapterId) {
         query.chapterId = String(chapterId).trim();
     }
 
-    if (topic) {
+    if (Array.isArray(topics)) {
+        query.topic = { $in: topics.map(t => String(t).trim()) };
+    } else if (topic) {
         query.topic = String(topic).trim();
     }
 
-    if (subTopic) {
+    if (Array.isArray(subTopics)) {
+        query.subTopic = { $in: subTopics.map(st => String(st).trim()) };
+    } else if (subTopic) {
         query.subTopic = String(subTopic).trim();
     }
 
@@ -172,6 +179,7 @@ exports.generateCustomTest = async (req, res) => {
             subject,               // single subject (legacy)
             subjects,              // NEW: array of subjects for combined quiz
             chapterId, subTopic, topic,
+            chapterIds, subTopics, topics, // NEW: arrays for multi-selection
             difficulty, isPYQ, pyqYear, pyqExam,
             count = 20,
             title,
@@ -197,7 +205,11 @@ exports.generateCustomTest = async (req, res) => {
             const perSubject = Math.ceil(countNum / subjectList.length);
 
             // Build base filters (no subject — will be injected per loop)
-            const baseQuery = buildFilterQuery({ chapterId, subTopic, topic, difficulty, isPYQ, pyqYear, pyqExam });
+            const baseQuery = buildFilterQuery({ 
+                chapterId, subTopic, topic, 
+                chapterIds, subTopics, topics,
+                difficulty, isPYQ, pyqYear, pyqExam 
+            });
 
             // Sample per subject in parallel
             const sampledArrays = await Promise.all(
@@ -224,7 +236,7 @@ exports.generateCustomTest = async (req, res) => {
                 return res.status(404).json({
                     success: false,
                     error: 'No questions found for the selected filters',
-                    filters: { subjects: subjectList, difficulty, isPYQ },
+                    filters: { subjects: subjectList, chapterIds, subTopics, topics, difficulty, isPYQ },
                 });
             }
 
@@ -241,7 +253,7 @@ exports.generateCustomTest = async (req, res) => {
                     requested: countNum,
                     durationSeconds,
                     subjects: subjectList,
-                    filters: { subjects: subjectList, difficulty, isPYQ },
+                    filters: { subjects: subjectList, chapterIds, subTopics, topics, difficulty, isPYQ },
                     breakdown: sampledArrays.map((arr, i) => ({ subject: subjectList[i], count: arr.length })),
                 },
                 data: finalQuestions,
@@ -252,6 +264,7 @@ exports.generateCustomTest = async (req, res) => {
         const query = buildFilterQuery({
             subject: subjectList[0],
             chapterId, subTopic, topic,
+            chapterIds, subTopics, topics,
             difficulty, isPYQ, pyqYear, pyqExam,
         });
 
@@ -294,7 +307,7 @@ exports.generateCustomTest = async (req, res) => {
                 available,
                 requested: countNum,
                 durationSeconds,
-                filters: { subject: subjectList[0], chapterId, subTopic, topic, difficulty, isPYQ, pyqYear, pyqExam },
+                filters: { subject: subjectList[0], chapterId, subTopics, topics, difficulty, isPYQ, pyqYear, pyqExam },
             },
             data: questions,
         });

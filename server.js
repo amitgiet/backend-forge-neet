@@ -78,6 +78,7 @@ app.use(
 const allowedOrigins = [
     normalizeOrigin(process.env.FRONTEND_URL) || 'http://localhost:3000',
     'http://localhost:8080',
+    'http://localhost:8081',
     'http://localhost:5173',
     "https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app",
     "https://neetforge.vercel.app"
