@@ -1,6 +1,7 @@
 const Test = require('../models/Test');
 const TestAttempt = require('../models/TestAttempt');
 const Question = require('../models/Question');
+const ImportedQuestion = require('../models/ImportedQuestion');
 
 // Get all tests with filters
 exports.getTests = async (req, res) => {
@@ -241,22 +242,60 @@ exports.createCustomTest = async (req, res) => {
       return res.status(400).json({ message: 'questionCount must be a positive number' });
     }
     
-    // Build question filter
-    const questionFilter = { isActive: true };
-    if (subjects?.length) questionFilter.subject = { $in: subjects };
-    if (chapters?.length) questionFilter.chapterId = { $in: chapters.map((c) => String(c).trim()) };
-    if (difficulty && difficulty !== 'mixed') questionFilter.difficulty = difficulty;
-    if (typeof ncertOnly === 'boolean') questionFilter.isPYQ = ncertOnly;
-    
-    // Get random questions
-    const questions = await Question.aggregate([
-      { $match: questionFilter },
+    // Build ImportedQuestion filter (this is the source used by curriculum counts)
+    const importedFilter = { isActive: { $ne: false } };
+    if (subjects?.length) importedFilter.subject = { $in: subjects.map((s) => String(s).trim().toLowerCase()) };
+    if (chapters?.length) importedFilter.chapterId = { $in: chapters.map((c) => String(c).trim()) };
+    if (difficulty && difficulty !== 'mixed') importedFilter.difficulty = String(difficulty).toLowerCase();
+    if (typeof ncertOnly === 'boolean') importedFilter.isPYQ = ncertOnly;
+
+    // Sample from imported bank
+    const importedQuestions = await ImportedQuestion.aggregate([
+      { $match: importedFilter },
       { $sample: { size: questionCountNum } }
     ]);
-    
-    if (questions.length < questionCountNum) {
-      return res.status(400).json({ message: `Only ${questions.length} questions available` });
+
+    if (importedQuestions.length < questionCountNum) {
+      return res.status(400).json({ message: `Only ${importedQuestions.length} questions available` });
     }
+
+    // Ensure sampled imported questions exist in Question collection for Test/TestAttempt flow
+    const ensuredQuestions = await Promise.all(importedQuestions.map(async (iq) => {
+      const options = ['A', 'B', 'C', 'D'].map((key) => ({
+        key,
+        text: { en: iq?.options?.[key] || '' },
+        isCorrect: iq?.correct_option === key,
+      }));
+
+      const doc = await Question.findOneAndUpdate(
+        { questionId: String(iq.questionId) },
+        {
+          $setOnInsert: {
+            questionId: String(iq.questionId),
+            question: { en: String(iq.question || '').trim() || 'Question text unavailable' },
+            options,
+            correctAnswer: iq?.correct_option || null,
+            explanation: { en: String(iq.explanation || '').trim() || 'No explanation available.' },
+            subject: String(iq.subject || '').toLowerCase(),
+            chapterId: String(iq.chapterId || chapters?.[0] || 'unknown'),
+            difficulty: ['easy', 'medium', 'hard'].includes(String(iq.difficulty || '').toLowerCase())
+              ? String(iq.difficulty).toLowerCase()
+              : 'medium',
+            isPYQ: !!iq.isPYQ,
+            pyqData: {
+              year: iq.pyqYear || undefined,
+              exam: iq.pyqExam || undefined,
+              shift: iq.pyqShift || undefined,
+            },
+            isActive: true,
+            questionType: 'mcq',
+          }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+
+      return doc;
+    }));
     
     // Create test
     const test = new Test({
@@ -273,7 +312,7 @@ exports.createCustomTest = async (req, res) => {
         marksPerQuestion: 4,
         negativeMarks: -1
       },
-      questions: questions.map(q => q._id),
+      questions: ensuredQuestions.map(q => q._id),
       createdBy: 'user'
     });
     
