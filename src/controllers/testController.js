@@ -234,21 +234,27 @@ exports.getUserAttempts = async (req, res) => {
 exports.createCustomTest = async (req, res) => {
   try {
     const { title, subjects, chapters, questionCount, duration, difficulty, ncertOnly } = req.body;
+    const questionCountNum = Number(questionCount);
+    const durationNum = Number(duration);
+
+    if (!Number.isFinite(questionCountNum) || questionCountNum <= 0) {
+      return res.status(400).json({ message: 'questionCount must be a positive number' });
+    }
     
     // Build question filter
     const questionFilter = { isActive: true };
     if (subjects?.length) questionFilter.subject = { $in: subjects };
-    if (chapters?.length) questionFilter.chapter = { $in: chapters };
+    if (chapters?.length) questionFilter.chapterId = { $in: chapters.map((c) => String(c).trim()) };
     if (difficulty && difficulty !== 'mixed') questionFilter.difficulty = difficulty;
-    if (ncertOnly) questionFilter.source = 'NCERT';
+    if (typeof ncertOnly === 'boolean') questionFilter.isPYQ = ncertOnly;
     
     // Get random questions
     const questions = await Question.aggregate([
       { $match: questionFilter },
-      { $sample: { size: questionCount } }
+      { $sample: { size: questionCountNum } }
     ]);
     
-    if (questions.length < questionCount) {
+    if (questions.length < questionCountNum) {
       return res.status(400).json({ message: `Only ${questions.length} questions available` });
     }
     
@@ -257,8 +263,8 @@ exports.createCustomTest = async (req, res) => {
       title: title || 'Custom Test',
       type: 'custom-part',
       config: {
-        duration,
-        totalQuestions: questionCount,
+        duration: Number.isFinite(durationNum) && durationNum > 0 ? durationNum : 45,
+        totalQuestions: questionCountNum,
         subjects,
         chapters,
         difficulty,
