@@ -241,7 +241,10 @@ exports.submitTest = async (req, res) => {
 exports.getAttempt = async (req, res) => {
   try {
     const attempt = await TestAttempt.findById(req.params.attemptId)
-      .populate('testId')
+      .populate({
+        path: 'testId',
+        populate: { path: 'questions' }
+      })
       .populate('answers.questionId');
     
     if (!attempt) {
