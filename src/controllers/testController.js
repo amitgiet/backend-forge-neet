@@ -2,6 +2,7 @@ const Test = require('../models/Test');
 const TestAttempt = require('../models/TestAttempt');
 const Question = require('../models/Question');
 const ImportedQuestion = require('../models/ImportedQuestion');
+const ImportedCurriculum = require('../models/ImportedCurriculum');
 
 // Get all tests with filters
 exports.getTests = async (req, res) => {
@@ -234,22 +235,50 @@ exports.getUserAttempts = async (req, res) => {
 // Create custom test
 exports.createCustomTest = async (req, res) => {
   try {
-    const { title, subjects, chapters, questionCount, duration, difficulty, ncertOnly } = req.body;
+    const { title, subjects, chapters, subTopics, questionCount, duration, difficulty, ncertOnly } = req.body;
     const questionCountNum = Number(questionCount);
     const durationNum = Number(duration);
+    const normalizedSubjects = Array.isArray(subjects)
+      ? subjects.map((s) => String(s).trim().toLowerCase()).filter(Boolean)
+      : [];
+    const selectedChapters = Array.isArray(chapters) ? chapters.map((c) => String(c).trim()).filter(Boolean) : [];
+    const selectedSubTopics = new Set(
+      (Array.isArray(subTopics) ? subTopics : []).map((s) => String(s).trim()).filter(Boolean)
+    );
 
     if (!Number.isFinite(questionCountNum) || questionCountNum <= 0) {
       return res.status(400).json({ message: 'questionCount must be a positive number' });
     }
     
-    // Build ImportedQuestion filter (this is the source used by curriculum counts)
+    // Build ImportedQuestion filter (this is the same source used by curriculum/subtopic counts)
     const importedFilter = { isActive: { $ne: false } };
-    if (subjects?.length) importedFilter.subject = { $in: subjects.map((s) => String(s).trim().toLowerCase()) };
-    if (chapters?.length) importedFilter.chapterId = { $in: chapters.map((c) => String(c).trim()) };
+    if (normalizedSubjects.length) importedFilter.subject = { $in: normalizedSubjects };
     if (difficulty && difficulty !== 'mixed') importedFilter.difficulty = String(difficulty).toLowerCase();
-    if (typeof ncertOnly === 'boolean') importedFilter.isPYQ = ncertOnly;
+    // "PYQ Only" should filter only when enabled
+    if (ncertOnly === true) importedFilter.isPYQ = true;
 
-    // Sample from imported bank
+    // If chapters are selected, derive exact UID pool from imported curriculum (authoritative mapping)
+    if (selectedChapters.length) {
+      const chapterDocs = await ImportedCurriculum.find({
+        _id: { $in: selectedChapters },
+        ...(normalizedSubjects.length ? { subject: { $in: normalizedSubjects } } : {})
+      }).lean();
+
+      const uidSet = new Set();
+      chapterDocs.forEach((ch) => {
+        (ch.topics || []).forEach((t) => {
+          (t.sub_topics || []).forEach((st) => {
+            if (selectedSubTopics.size > 0 && !selectedSubTopics.has(String(st.subTopic || ''))) return;
+            (st.uids || []).forEach((uid) => uidSet.add(String(uid)));
+          });
+        });
+      });
+
+      const uidList = Array.from(uidSet);
+      importedFilter.questionId = { $in: uidList };
+    }
+
+    // Sample from imported bank using fully aligned filter
     const importedQuestions = await ImportedQuestion.aggregate([
       { $match: importedFilter },
       { $sample: { size: questionCountNum } }
@@ -277,7 +306,7 @@ exports.createCustomTest = async (req, res) => {
             correctAnswer: iq?.correct_option || null,
             explanation: { en: String(iq.explanation || '').trim() || 'No explanation available.' },
             subject: String(iq.subject || '').toLowerCase(),
-            chapterId: String(iq.chapterId || chapters?.[0] || 'unknown'),
+            chapterId: String(iq.chapterId || selectedChapters[0] || 'unknown'),
             difficulty: ['easy', 'medium', 'hard'].includes(String(iq.difficulty || '').toLowerCase())
               ? String(iq.difficulty).toLowerCase()
               : 'medium',
@@ -296,7 +325,7 @@ exports.createCustomTest = async (req, res) => {
 
       return doc;
     }));
-    
+
     // Create test
     const test = new Test({
       title: title || 'Custom Test',
@@ -304,10 +333,10 @@ exports.createCustomTest = async (req, res) => {
       config: {
         duration: Number.isFinite(durationNum) && durationNum > 0 ? durationNum : 45,
         totalQuestions: questionCountNum,
-        subjects,
-        chapters,
+        subjects: normalizedSubjects.map((s) => s.charAt(0).toUpperCase() + s.slice(1)),
+        chapters: selectedChapters,
         difficulty,
-        ncertOnly,
+        ncertOnly: ncertOnly === true,
         negativeMarking: true,
         marksPerQuestion: 4,
         negativeMarks: -1
