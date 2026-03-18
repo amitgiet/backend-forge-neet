@@ -3,6 +3,7 @@ const TestAttempt = require('../models/TestAttempt');
 const Question = require('../models/Question');
 const ImportedQuestion = require('../models/ImportedQuestion');
 const ImportedCurriculum = require('../models/ImportedCurriculum');
+const UserQuestion = require('../models/UserQuestion');
 
 // Get all tests with filters
 exports.getTests = async (req, res) => {
@@ -184,6 +185,46 @@ exports.submitTest = async (req, res) => {
     attempt.status = 'submitted';
     attempt.submittedAt = new Date();
     await attempt.save();
+
+    // Feed attempted test questions into NeuronZ (L1 enrollment).
+    // Group by source so source metadata remains meaningful.
+    const questionsById = new Map(
+      (questions || []).map((q) => [String(q._id), q])
+    );
+    const groupedEnrollments = new Map();
+
+    (attempt.answers || []).forEach((answer) => {
+      if (!answer?.selectedOption) return;
+      const q = questionsById.get(String(answer.questionId));
+      const canonicalQuestionId = String(q?.questionId || '').trim();
+      if (!canonicalQuestionId) return;
+
+      const source = {
+        subject: q?.subject || null,
+        chapterId: q?.chapterId || null,
+        topic: q?.topicId || null,
+        subTopic: null
+      };
+      const sourceKey = `${source.subject || ''}|${source.chapterId || ''}|${source.topic || ''}`;
+      if (!groupedEnrollments.has(sourceKey)) {
+        groupedEnrollments.set(sourceKey, { source, uids: new Set() });
+      }
+      groupedEnrollments.get(sourceKey).uids.add(canonicalQuestionId);
+    });
+
+    if (groupedEnrollments.size > 0) {
+      try {
+        for (const entry of groupedEnrollments.values()) {
+          await UserQuestion.bulkEnroll(
+            req.user.id,
+            Array.from(entry.uids),
+            entry.source
+          );
+        }
+      } catch (enrollErr) {
+        console.warn('[submitTest] NeuronZ enroll failed (non-blocking):', enrollErr.message);
+      }
+    }
     
     // Update test avg score
     const allAttempts = await TestAttempt.find({ testId: test._id, status: 'submitted' });

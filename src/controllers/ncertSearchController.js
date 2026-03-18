@@ -5,6 +5,7 @@ const Chapter = require('../models/Chapter');
 const Topic = require('../models/Topic');
 const Question = require('../models/Question');
 const NcertTopicQuizAttempt = require('../models/NcertTopicQuizAttempt');
+const UserQuestion = require('../models/UserQuestion');
 const ErrorResponse = require('../utils/errorResponse');
 
 const toRegex = (value) => new RegExp(value.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
@@ -555,6 +556,24 @@ exports.submitTopicQuiz = async (req, res, next) => {
             answers: evaluatedAnswers
         });
 
+        // Feed attempted NCERT topic-quiz questions into NeuronZ (L1 enrollment).
+        let neuronzSync = { enrolled: 0, existing: 0 };
+        try {
+            const attemptedQuestionIds = evaluatedAnswers
+                .filter((a) => a.selectedOption !== null)
+                .map((a) => String(a.questionId));
+            if (attemptedQuestionIds.length > 0) {
+                neuronzSync = await UserQuestion.bulkEnroll(userId, attemptedQuestionIds, {
+                    subject: topic.subject || null,
+                    chapterId: topic.chapterId || null,
+                    topic: topic.topicId || null,
+                    subTopic: null
+                });
+            }
+        } catch (enrollErr) {
+            console.warn('[submitTopicQuiz] NeuronZ enroll failed (non-blocking):', enrollErr.message);
+        }
+
         const bestAgg = await NcertTopicQuizAttempt.aggregate([
             {
                 $match: {
@@ -589,7 +608,8 @@ exports.submitTopicQuiz = async (req, res, next) => {
                     hasTaken: true,
                     attempts: best.attempts,
                     bestScore: best.bestScore
-                }
+                },
+                neuronz: neuronzSync
             }
         });
     } catch (error) {
