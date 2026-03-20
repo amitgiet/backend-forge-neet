@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Token = require('../models/Token');
 const StudySession = require('../models/StudySession');
 const TestAttempt = require('../models/TestAttempt');
 const QuizMeta = require('../models/QuizMeta');
@@ -48,7 +49,10 @@ exports.register = async (req, res, next) => {
             primaryExam,
             targetYear,
             class: userClass,
-            preferredLanguage
+            preferredLanguage,
+            fcmToken,
+            timezone,
+            userAgent
         } = req.body;
 
         // Check if user exists
@@ -82,6 +86,14 @@ exports.register = async (req, res, next) => {
             }
         });
 
+        if (fcmToken) {
+            await Token.findOneAndUpdate(
+                { fcmToken },
+                { user: user._id, fcmToken, timezone: timezone || 'UTC', userAgent: userAgent || 'mobile_app' },
+                { upsert: true, new: true }
+            );
+        }
+
         sendTokenResponse(user, 201, res);
 
     } catch (error) {
@@ -94,7 +106,7 @@ exports.register = async (req, res, next) => {
 // @access  Public
 exports.login = async (req, res, next) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, fcmToken, timezone, userAgent } = req.body;
 
         // Validate email & password
         if (!email || !password) {
@@ -128,6 +140,14 @@ exports.login = async (req, res, next) => {
         user.lastLoginAt = new Date();
         user.updateStreak();
         await user.save({ validateBeforeSave: false });
+
+        if (fcmToken) {
+            await Token.findOneAndUpdate(
+                { fcmToken },
+                { user: user._id, fcmToken, timezone: timezone || 'UTC', userAgent: userAgent || 'mobile_app' },
+                { upsert: true, new: true }
+            );
+        }
 
         sendTokenResponse(user, 200, res);
 

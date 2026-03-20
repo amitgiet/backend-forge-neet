@@ -37,6 +37,10 @@ const SocketService = require('./src/services/socketService');
 const socketService = new SocketService(io);
 socketService.initialize();
 
+// Initialize Cron Service (Push Notifications)
+const CronService = require('./src/services/cronService');
+CronService.initialize();
+
 // Make io available to routes
 app.set('io', io);
 
@@ -59,6 +63,7 @@ const allowedFrameAncestors = [
     normalizeOrigin(process.env.FRONTEND_URL) || 'http://localhost:3000',
     'http://localhost:8080',
     'http://localhost:5173',
+    "https://neetforge.in",
     normalizeOrigin(process.env.FRONTEND_URL_PROD)
 ].filter(Boolean);
 
@@ -80,7 +85,7 @@ const allowedOrigins = [
     'http://localhost:8080',
     'http://localhost:8081',
     'http://localhost:5173',
-    "https://id-preview--efcfdeae-989c-4e6f-9537-c5377a163c0a.lovable.app",
+    "https://neetforge.in",
     "https://neetforge.vercel.app"
 ];
 

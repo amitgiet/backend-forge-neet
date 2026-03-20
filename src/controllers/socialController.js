@@ -2,6 +2,7 @@ const Friend = require('../models/Friend');
 const Chat = require('../models/Chat');
 const Message = require('../models/Message');
 const User = require('../models/User');
+const NotificationService = require('../services/notificationService');
 
 // Search users by email, phone, or name
 exports.searchUsers = async (req, res) => {
@@ -65,7 +66,14 @@ exports.sendFriendRequest = async (req, res) => {
                 message: `${friend.userId.name} sent you a friend request`
             });
         }
-        
+
+        NotificationService.sendEventNotification(
+            friendId,
+            'friend_request',
+            '👤 New Friend Request!',
+            `${friend.userId.name || 'Someone'} sent you a friend request.`
+        ).catch(err => console.error('Push error:', err));
+
         res.status(201).json({ success: true, data: friend });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -96,7 +104,14 @@ exports.acceptFriendRequest = async (req, res) => {
                 message: `${friend.friendId.name} accepted your friend request`
             });
         }
-        
+
+        NotificationService.sendEventNotification(
+            friend.userId,
+            'friend_accepted',
+            '✅ Request Accepted!',
+            `${friend.friendId.name || 'Someone'} accepted your friend request.`
+        ).catch(err => console.error('Push error:', err));
+
         res.json({ success: true, data: friend });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -215,15 +230,28 @@ exports.sendMessage = async (req, res) => {
             readBy: [{ userId, readAt: new Date() }]
         }).then(m => m.populate('sender', 'name email avatar _id'));
         
-        await Chat.findByIdAndUpdate(chatId, {
+        const updatedChat = await Chat.findByIdAndUpdate(chatId, {
             lastMessage: {
                 text,
                 sender: userId,
                 timestamp: new Date()
             },
             updatedAt: new Date()
-        });
-        
+        }, { new: true });
+
+        if (updatedChat && updatedChat.participants) {
+            updatedChat.participants.forEach(pId => {
+                if (String(pId) !== String(userId)) {
+                    NotificationService.sendEventNotification(
+                        pId,
+                        'new_message',
+                        updatedChat.type === 'group' ? `💬 ${updatedChat.name || 'Group Chat'}` : '💬 New Message',
+                        `${message.sender.name}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`
+                    ).catch(err => console.error('Push error:', err));
+                }
+            });
+        }
+
         res.status(201).json({ success: true, data: message });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

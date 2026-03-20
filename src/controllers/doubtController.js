@@ -17,6 +17,7 @@
  */
 
 const Doubt = require('../models/Doubt');
+const NotificationService = require('../services/notificationService');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics', 'general'];
 const PAGE_SIZE = 20;
@@ -188,6 +189,16 @@ exports.addAnswer = async (req, res) => {
         await doubt.save();
 
         const newAnswer = doubt.answers[doubt.answers.length - 1];
+
+        if (String(doubt.userId) !== String(req.user.id)) {
+            NotificationService.sendEventNotification(
+                doubt.userId,
+                'doubt_answered',
+                '💬 New Answer to your Doubt!',
+                `${req.user.name || 'Someone'} posted an answer to your doubt. Check it out!`
+            ).catch(err => console.error('Push error:', err));
+        }
+
         res.status(201).json({ success: true, data: newAnswer });
     } catch (err) {
         console.error('addAnswer error:', err);
@@ -241,6 +252,15 @@ exports.acceptAnswer = async (req, res) => {
         doubt.isResolved = true;
         await doubt.save();
 
+        if (String(req.user.id) !== String(answer.userId)) {
+            NotificationService.sendEventNotification(
+                answer.userId,
+                'answer_accepted',
+                '✅ Answer Accepted!',
+                `Your answer was accepted by the author of a doubt. Great job!`
+            ).catch(err => console.error('Push error:', err));
+        }
+
         res.json({ success: true, data: { answerId: answer._id, isResolved: true } });
     } catch (err) {
         console.error('acceptAnswer error:', err);
@@ -258,6 +278,16 @@ exports.verifyAnswer = async (req, res) => {
 
         answer.isVerified = !answer.isVerified;
         await doubt.save();
+
+        if (answer.isVerified && String(req.user.id) !== String(answer.userId)) {
+            NotificationService.sendEventNotification(
+                answer.userId,
+                'answer_verified',
+                '🎓 Educator Verified',
+                `An educator verified your answer. Well done!`
+            ).catch(err => console.error('Push error:', err));
+        }
+
         res.json({ success: true, data: { isVerified: answer.isVerified } });
     } catch (err) {
         console.error('verifyAnswer error:', err);

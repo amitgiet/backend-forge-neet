@@ -9,13 +9,13 @@ const UserQuestion = require('../models/UserQuestion');
 exports.getTests = async (req, res) => {
   try {
     const { type, subject, difficulty, isPremium } = req.query;
-    
+
     const filter = { isActive: true };
     if (type) filter.type = type;
     if (subject) filter['config.subjects'] = subject;
     if (difficulty) filter['config.difficulty'] = difficulty;
     if (isPremium !== undefined) filter.isPremium = isPremium === 'true';
-    
+
     const tests = await Test.find(filter).sort({ createdAt: -1 });
     res.json({ success: true, count: tests.length, data: tests });
   } catch (error) {
@@ -41,17 +41,17 @@ exports.startTest = async (req, res) => {
   try {
     const { testId } = req.params;
     const userId = req.user._id;
-    
+
     const test = await Test.findById(testId).populate('questions');
     if (!test) {
       return res.status(404).json({ message: 'Test not found' });
     }
-    
+
     // Check if user has premium access for premium tests
     if (test.isPremium && req.user.subscription?.plan !== 'pro') {
       return res.status(403).json({ message: 'Premium subscription required' });
     }
-    
+
     // Create attempt
     const attempt = new TestAttempt({
       userId,
@@ -67,15 +67,15 @@ exports.startTest = async (req, res) => {
         isMarkedForReview: false
       }))
     });
-    
+
     await attempt.save();
-    
+
     // Increment attempt count
     test.totalAttempts++;
     await test.save();
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       data: {
         attemptId: attempt._id,
         test: {
@@ -97,16 +97,16 @@ exports.saveAnswer = async (req, res) => {
   try {
     const { attemptId } = req.params;
     const { questionId, selectedOption, timeSpent, isMarkedForReview } = req.body;
-    
+
     const attempt = await TestAttempt.findById(attemptId);
     if (!attempt) {
       return res.status(404).json({ message: 'Attempt not found' });
     }
-    
+
     if (attempt.status !== 'in-progress') {
       return res.status(400).json({ message: 'Test already submitted' });
     }
-    
+
     // Find and update answer
     const answerIndex = attempt.answers.findIndex(a => a.questionId.toString() === questionId);
     if (answerIndex !== -1) {
@@ -114,7 +114,7 @@ exports.saveAnswer = async (req, res) => {
       attempt.answers[answerIndex].timeSpent = timeSpent;
       attempt.answers[answerIndex].isMarkedForReview = isMarkedForReview;
       attempt.answers[answerIndex].attemptedAt = new Date();
-      
+
       await attempt.save();
       res.json({ success: true, message: 'Answer saved' });
     } else {
@@ -129,23 +129,23 @@ exports.saveAnswer = async (req, res) => {
 exports.submitTest = async (req, res) => {
   try {
     const { attemptId } = req.params;
-    
+
     const attempt = await TestAttempt.findById(attemptId).populate({
       path: 'testId',
       populate: { path: 'questions' }
     });
-    
+
     if (!attempt) {
       return res.status(404).json({ message: 'Attempt not found' });
     }
-    
+
     if (attempt.status !== 'in-progress') {
       return res.status(400).json({ message: 'Test already submitted' });
     }
-    
+
     const test = attempt.testId;
     const questions = test.questions;
-    
+
     // Evaluate answers
     attempt.answers.forEach(answer => {
       const question = questions.find(q => q._id.toString() === answer.questionId.toString());
@@ -154,10 +154,10 @@ exports.submitTest = async (req, res) => {
         answer.marksAwarded = answer.isCorrect ? test.config.marksPerQuestion : (test.config.negativeMarking ? test.config.negativeMarks : 0);
       }
     });
-    
+
     // Calculate results
     attempt.calculateResults(questions);
-    
+
     // Calculate rank
     const betterAttempts = await TestAttempt.countDocuments({
       testId: test._id,
@@ -165,13 +165,13 @@ exports.submitTest = async (req, res) => {
       'results.percentage': { $gt: attempt.results.percentage }
     });
     attempt.results.rank = betterAttempts + 1;
-    
+
     const totalAttempts = await TestAttempt.countDocuments({
       testId: test._id,
       status: 'submitted'
     });
     attempt.results.percentile = totalAttempts > 0 ? ((totalAttempts - betterAttempts) / totalAttempts) * 100 : 100;
-    
+
     // Identify weak areas
     attempt.weakAreas = attempt.results.chapterWise
       .filter(ch => ch.accuracy < 60)
@@ -181,7 +181,7 @@ exports.submitTest = async (req, res) => {
         questionsWrong: ch.incorrect,
         accuracy: ch.accuracy
       }));
-    
+
     attempt.status = 'submitted';
     attempt.submittedAt = new Date();
     await attempt.save();
@@ -225,12 +225,12 @@ exports.submitTest = async (req, res) => {
         console.warn('[submitTest] NeuronZ enroll failed (non-blocking):', enrollErr.message);
       }
     }
-    
+
     // Update test avg score
     const allAttempts = await TestAttempt.find({ testId: test._id, status: 'submitted' });
     test.avgScore = allAttempts.reduce((sum, a) => sum + a.results.percentage, 0) / allAttempts.length;
     await test.save();
-    
+
     res.json({ success: true, data: attempt });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -246,11 +246,11 @@ exports.getAttempt = async (req, res) => {
         populate: { path: 'questions' }
       })
       .populate('answers.questionId');
-    
+
     if (!attempt) {
       return res.status(404).json({ message: 'Attempt not found' });
     }
-    
+
     res.json({ success: true, data: attempt });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -262,14 +262,14 @@ exports.getUserAttempts = async (req, res) => {
   try {
     const userId = req.user._id;
     const { status } = req.query;
-    
+
     const filter = { userId };
     if (status) filter.status = status;
-    
+
     const attempts = await TestAttempt.find(filter)
       .populate('testId')
       .sort({ createdAt: -1 });
-    
+
     res.json({ success: true, count: attempts.length, data: attempts });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -293,7 +293,7 @@ exports.createCustomTest = async (req, res) => {
     if (!Number.isFinite(questionCountNum) || questionCountNum <= 0) {
       return res.status(400).json({ message: 'questionCount must be a positive number' });
     }
-    
+
     // Build ImportedQuestion filter (this is the same source used by curriculum/subtopic counts)
     const importedFilter = { isActive: { $ne: false } };
     if (normalizedSubjects.length) importedFilter.subject = { $in: normalizedSubjects };
@@ -388,7 +388,7 @@ exports.createCustomTest = async (req, res) => {
       questions: ensuredQuestions.map(q => q._id),
       createdBy: 'user'
     });
-    
+
     await test.save();
     res.json({ success: true, data: test });
   } catch (error) {

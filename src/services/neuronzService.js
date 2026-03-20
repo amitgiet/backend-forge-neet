@@ -242,7 +242,20 @@ class NeuronzService {
                     topicId: { $first: '$qData.topic' },
                     subject: { $first: '$qData.subject' },
                     totalTracked: { $sum: 1 },
-                    dueNow: { $sum: { $cond: [{ $lte: ['$nextRevision', endOfToday] }, 1, 0] } },
+                    dueNow: {
+                        $sum: {
+                            $cond: [
+                                {
+                                    $or: [
+                                        { $lte: ['$nextRevision', endOfToday] },
+                                        { $and: [{ $eq: ['$level', 1] }, { $eq: ['$totalAttempts', 0] }] }
+                                    ]
+                                },
+                                1,
+                                0
+                            ]
+                        }
+                    },
                     L1: { $sum: { $cond: [{ $eq: ['$level', 1] }, 1, 0] } },
                     L2: { $sum: { $cond: [{ $eq: ['$level', 2] }, 1, 0] } },
                     L3: { $sum: { $cond: [{ $eq: ['$level', 3] }, 1, 0] } },
@@ -274,7 +287,20 @@ class NeuronzService {
                         chapter: '$nData.chapter'
                     },
                     totalTracked: { $sum: 1 },
-                    dueNow: { $sum: { $cond: [{ $lte: ['$nextRevision', endOfToday] }, 1, 0] } },
+                    dueNow: {
+                        $sum: {
+                            $cond: [
+                                {
+                                    $or: [
+                                        { $lte: ['$nextRevision', endOfToday] },
+                                        { $and: [{ $eq: ['$level', 1] }, { $eq: ['$totalAttempts', 0] }] }
+                                    ]
+                                },
+                                1,
+                                0
+                            ]
+                        }
+                    },
                     L1: { $sum: { $cond: [{ $eq: ['$level', 1] }, 1, 0] } },
                     L2: { $sum: { $cond: [{ $eq: ['$level', 2] }, 1, 0] } },
                     L3: { $sum: { $cond: [{ $eq: ['$level', 3] }, 1, 0] } },
