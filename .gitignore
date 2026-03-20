@@ -68,3 +68,6 @@ dist-ssr
 /main.ts
 /ntuser.dat*
 /ntuser.ini
+/public-site/
+/public-app/
+/public-frontend/

@@ -11,6 +11,7 @@ const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const path = require('path');
+const fs = require('fs');
 
 // Import configurations
 const connectDB = require('./src/config/database');
@@ -86,11 +87,16 @@ const allowedOrigins = [
     'http://localhost:8081',
     'http://localhost:5173',
     "https://neetforge.in",
-    "https://neetforge.vercel.app"
+    "https://neetforge.vercel.app",
+    normalizeOrigin(process.env.FRONTEND_URL_PROD)
 ];
 
 const corsOptions = {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(normalizeOrigin(origin))) return callback(null, true);
+        return callback(new Error('CORS not allowed for this origin'));
+    },
     credentials: true,
     optionsSuccessStatus: 200
 };
@@ -125,7 +131,6 @@ if (process.env.NODE_ENV === 'development') {
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Create uploads directory if it doesn't exist
-const fs = require('fs');
 const uploadDir = process.env.UPLOAD_PATH || './uploads';
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
@@ -134,7 +139,7 @@ if (!fs.existsSync(uploadDir)) {
 // ============ ROUTES ============
 
 // API Info
-app.get('/', (req, res) => {
+app.get('/api', (req, res) => {
     res.json({
         success: true,
         message: '🚀 NEETForge API is running!',
@@ -198,13 +203,36 @@ app.use(`/api/${API_VERSION}/billing`, require('./src/routes/billingRoutes'));
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));
 // app.use(`/api/${API_VERSION}/subscription`, require('./src/routes/subscriptionRoutes'));
 
+// ============ STATIC FRONTEND ============
+const frontendBuildPath = process.env.FRONTEND_BUILD_PATH || path.join(__dirname, 'public-frontend');
+const frontendIndexPath = path.join(frontendBuildPath, 'index.html');
+const hasFrontendBuild = fs.existsSync(frontendIndexPath);
+
+if (hasFrontendBuild) {
+    app.use('/', express.static(frontendBuildPath));
+}
+
+const isAssetRequest = (requestPath) => path.extname(requestPath || '') !== '';
+
+if (hasFrontendBuild) {
+    app.get('*', (req, res, next) => {
+        if (req.path.startsWith('/api/')) return next();
+        if (req.path === '/health') return next();
+        if (req.path.startsWith('/uploads/')) return next();
+        if (isAssetRequest(req.path)) return next();
+        return res.sendFile(frontendIndexPath);
+    });
+}
+
 // ============ ERROR HANDLING ============
 
 // 404 handler
 app.use((req, res, next) => {
+    const isApiRoute = req.path.startsWith('/api/');
+    const isSystemRoute = req.path === '/health' || req.path.startsWith('/uploads/');
     res.status(404).json({
         success: false,
-        error: 'Route not found'
+        error: isApiRoute || isSystemRoute ? 'Route not found' : 'Page not found'
     });
 });
 

@@ -17,7 +17,7 @@
  */
 
 const Doubt = require('../models/Doubt');
-const NotificationService = require('../services/notificationService');
+const NotificationService = require('../../services/notificationService');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics', 'general'];
 const PAGE_SIZE = 20;

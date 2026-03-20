@@ -295,7 +295,10 @@ exports.updatePassword = async (req, res, next) => {
 exports.logout = async (req, res, next) => {
     res.cookie('token', 'none', {
         expires: new Date(Date.now() + 10 * 1000),
-        httpOnly: true
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/'
     });
 
     res.status(200).json({
@@ -824,7 +827,8 @@ const sendTokenResponse = (user, statusCode, res) => {
         ),
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-        sameSite: 'strict'
+        sameSite: 'lax',
+        path: '/'
     };
 
     res

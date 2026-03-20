@@ -1,6 +1,12 @@
 // firebase.js
 const admin = require('firebase-admin');
 
+const hasFirebaseConfig = Boolean(
+    process.env.FIREBASE_PROJECT_ID &&
+    process.env.FIREBASE_PRIVATE_KEY &&
+    process.env.FIREBASE_CLIENT_EMAIL
+);
+
 const serviceAccount = {
     type: process.env.FIREBASE_TYPE || 'service_account',
     project_id: process.env.FIREBASE_PROJECT_ID,
@@ -16,10 +22,12 @@ const serviceAccount = {
     universe_domain: process.env.FIREBASE_UNIVERSE_DOMAIN || 'googleapis.com',
 };
 
-if (!admin.apps.length) {
+if (hasFirebaseConfig && !admin.apps.length) {
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
     });
 }
+
+admin.__isConfigured = hasFirebaseConfig;
 
 module.exports = admin;

@@ -2,7 +2,7 @@ const Friend = require('../models/Friend');
 const Chat = require('../models/Chat');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const NotificationService = require('../services/notificationService');
+const NotificationService = require('../../services/notificationService');
 
 // Search users by email, phone, or name
 exports.searchUsers = async (req, res) => {

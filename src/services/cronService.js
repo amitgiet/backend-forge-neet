@@ -3,7 +3,7 @@ const moment = require('moment-timezone');
 const Token = require('../models/Token');
 const DailyChallenge = require('../models/DailyChallenge');
 const NotificationLog = require('../models/NotificationLog');
-const NotificationService = require('./notificationService');
+const NotificationService = require('../../services/notificationService');
 
 class CronService {
     static initialize() {

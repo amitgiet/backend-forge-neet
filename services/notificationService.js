@@ -1,11 +1,12 @@
-const admin = require('../config/Firebase');
-const Token = require('../models/Token');
-const NotificationLog = require('../models/NotificationLog');
-const User = require('../models/User');
-const redisClient = require('../config/redis');
+const admin = require('../src/config/Firebase');
+const Token = require('../src/models/Token');
+const NotificationLog = require('../src/models/NotificationLog');
+const User = require('../src/models/User');
 const { NOTIFICATION_PROMPT } = require("../utils/promptTemplates")
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const moment = require('moment');
+
+const hasMessagingClient = () => Boolean(admin?.__isConfigured && admin.apps?.length);
 
 /**
  * Notification Type Registry
@@ -551,6 +552,11 @@ const sendScheduledNotifications = async (notificationType) => {
         return { sent: 0, skipped: 0, errors: 0 };
     }
 
+    if (!hasMessagingClient()) {
+        console.warn('[Notification] Firebase messaging is not configured; skipping scheduled notifications.');
+        return { sent: 0, skipped: validUsers.length, errors: 0 };
+    }
+
     try {
         const response = await admin.messaging().sendEachForMulticast({
             tokens: validUsers.map(u => u.fcmToken),
@@ -649,6 +655,10 @@ const sendEventNotification = async (userId, notificationType, title, body, user
     if (isRecentlySent) {
         console.log(`[Notification] Skipping ${notificationType} for user ${userId}, sent within last ${COOLDOWN_MINUTES}m`);
         return { success: false, skipped: true, reason: 'Notification already sent recently' };
+    }
+
+    if (!hasMessagingClient()) {
+        return { success: false, skipped: true, reason: 'Firebase messaging is not configured' };
     }
 
     try {
