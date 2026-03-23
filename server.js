@@ -87,7 +87,7 @@ const allowedOrigins = [
     'http://localhost:8081',
     'http://localhost:5173',
     "https://neetforge.in",
-    "https://neetforge.vercel.app",
+    "https://neetforge.in",
     normalizeOrigin(process.env.FRONTEND_URL_PROD)
 ];
 

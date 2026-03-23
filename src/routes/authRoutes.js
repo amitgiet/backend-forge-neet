@@ -2,6 +2,7 @@ const express = require('express');
 const {
     register,
     login,
+    googleLogin,
     getMe,
     updateProfile,
     updatePassword,
@@ -23,6 +24,7 @@ const router = express.Router();
 // Public routes
 router.post('/register', register);
 router.post('/login', login);
+router.post('/google', googleLogin);
 // OTP flow temporarily disabled:
 // router.post('/send-otp', sendSignupOtp);
 // router.post('/verify-otp', verifyOtp);

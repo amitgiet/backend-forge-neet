@@ -11,6 +11,7 @@ const mongoose = require('mongoose');
 const { ensureReferralForUser } = require('../services/referral.service');
 
 const crypto = require('crypto');
+const { OAuth2Client } = require('google-auth-library');
 
 // Helper to generate numeric OTP
 const generateOTP = () => {
@@ -847,4 +848,68 @@ const sendTokenResponse = (user, statusCode, res) => {
                 onboardingStep: user.onboarding?.currentStep || 1
             }
         });
+};
+
+// @desc    Google login user
+// @route   POST /api/v1/auth/google
+// @access  Public
+exports.googleLogin = async (req, res, next) => {
+    try {
+        const { idToken, fcmToken, timezone, userAgent } = req.body;
+        
+        if (!idToken) {
+            return res.status(400).json({ success: false, error: 'Please provide an Google ID token' });
+        }
+
+        const { OAuth2Client } = require('google-auth-library');
+        const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+        const ticket = await client.verifyIdToken({
+            idToken,
+        });
+        const payload = ticket.getPayload();
+        
+        const { email, name, picture } = payload;
+        const User = require('../models/User');
+
+        let user = await User.findOne({ email });
+
+        if (!user) {
+            user = await User.create({
+                name,
+                email,
+                avatar: picture,
+                fromGoogle: true,
+                isPhoneVerified: false,
+                primaryExam: 'NEET_UG',
+                exams: [{
+                    examType: 'NEET_UG',
+                    targetYear: new Date().getFullYear() + 1,
+                    isActive: true
+                }],
+                profile: {
+                    class: 12,
+                    preferredLanguage: 'en'
+                }
+            });
+        }
+
+        user.lastLoginAt = new Date();
+        user.updateStreak();
+        await user.save({ validateBeforeSave: false });
+
+        if (fcmToken) {
+            const Token = require('../models/Token');
+            await Token.findOneAndUpdate(
+                { fcmToken },
+                { user: user._id, fcmToken, timezone: timezone || 'UTC', userAgent: userAgent || 'mobile_app' },
+                { upsert: true, new: true }
+            );
+        }
+
+        sendTokenResponse(user, 200, res);
+
+    } catch (error) {
+        console.error('Google Sign-In Error:', error);
+        return res.status(401).json({ success: false, error: 'Invalid Google token' });
+    }
 };

@@ -888,7 +888,7 @@ exports.getResourceReactions = async (req, res) => {
 
         // Format response
         const reactions = {};
-        
+
         aggregated.forEach(agg => {
             reactions[agg._id] = {
                 likes: agg.likes,
