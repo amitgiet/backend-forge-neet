@@ -15,6 +15,11 @@ const ImportedQuestionSchema = new mongoose.Schema(
             default: null,
         },
 
+        questionHi: {
+            type: String,
+            default: null,
+        },
+
         // The plain-text correct answer
         correct_answer: {
             type: String,
@@ -35,7 +40,19 @@ const ImportedQuestionSchema = new mongoose.Schema(
             D: { type: String, default: null },
         },
 
+        optionsHi: {
+            A: { type: String, default: null },
+            B: { type: String, default: null },
+            C: { type: String, default: null },
+            D: { type: String, default: null },
+        },
+
         explanation: {
+            type: String,
+            default: null,
+        },
+
+        explanationHi: {
             type: String,
             default: null,
         },

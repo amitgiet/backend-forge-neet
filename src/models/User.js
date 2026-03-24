@@ -58,7 +58,7 @@ const UserSchema = new mongoose.Schema({
     profile: {
         class: { type: Number, enum: [11, 12, 13], default: 12 },
         coachingInstitute: { type: String, enum: ['Allen', 'Aakash', 'FIITJEE', 'Resonance', 'Self-Study', 'Other'] },
-        preferredLanguage: { type: String, enum: ['en', 'hi'], default: 'en' },
+        preferredLanguage: { type: String, enum: ['en', 'hi'], default: 'hi' },
         studyHoursPerDay: { type: Number, min: 1, max: 18, default: 6 },
         avatar: { type: String },
         state: { type: String },

@@ -13,6 +13,10 @@
 
 const ImportedQuestion = require('../models/ImportedQuestion');
 const ImportedCurriculum = require('../models/ImportedCurriculum');
+const {
+    getPreferredLanguage,
+    mapImportedQuestionsForLanguage,
+} = require('../utils/languagePreference');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
 const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'];
@@ -118,7 +122,7 @@ exports.filterQuestions = async (req, res) => {
                 totalPages: Math.ceil(total / limit),
                 hasNext: page * limit < total,
             },
-            data: questions,
+            data: mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req)),
         });
     } catch (err) {
         console.error('filterQuestions error:', err);
@@ -144,9 +148,11 @@ exports.getPYQs = async (req, res) => {
             limit,
         });
 
+        const localizedQuestions = mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req));
+
         // Group by year for UI convenience
         const byYear = {};
-        questions.forEach((q) => {
+        localizedQuestions.forEach((q) => {
             const yr = String(q.pyqYear || 'unknown');
             if (!byYear[yr]) byYear[yr] = [];
             byYear[yr].push(q);
@@ -154,9 +160,9 @@ exports.getPYQs = async (req, res) => {
 
         res.json({
             success: true,
-            total: questions.length,
+            total: localizedQuestions.length,
             byYear,
-            data: questions,
+            data: localizedQuestions,
         });
     } catch (err) {
         console.error('getPYQs error:', err);
@@ -230,7 +236,10 @@ exports.generateCustomTest = async (req, res) => {
             }
 
             // Trim to requested count
-            const finalQuestions = questions.slice(0, countNum);
+            const finalQuestions = mapImportedQuestionsForLanguage(
+                questions.slice(0, countNum),
+                getPreferredLanguage(req)
+            );
 
             if (finalQuestions.length === 0) {
                 return res.status(404).json({
@@ -309,7 +318,7 @@ exports.generateCustomTest = async (req, res) => {
                 durationSeconds,
                 filters: { subject: subjectList[0], chapterId, subTopics, topics, difficulty, isPYQ, pyqYear, pyqExam },
             },
-            data: questions,
+            data: mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req)),
         });
     } catch (err) {
         console.error('generateCustomTest error:', err);

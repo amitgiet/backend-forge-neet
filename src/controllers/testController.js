@@ -4,6 +4,10 @@ const Question = require('../models/Question');
 const ImportedQuestion = require('../models/ImportedQuestion');
 const ImportedCurriculum = require('../models/ImportedCurriculum');
 const UserQuestion = require('../models/UserQuestion');
+const {
+  getPreferredLanguage,
+  mapQuestionDocsForLanguage,
+} = require('../utils/languagePreference');
 
 // Get all tests with filters
 exports.getTests = async (req, res) => {
@@ -52,6 +56,8 @@ exports.startTest = async (req, res) => {
       return res.status(403).json({ message: 'Premium subscription required' });
     }
 
+    const language = getPreferredLanguage(req);
+
     // Create attempt
     const attempt = new TestAttempt({
       userId,
@@ -83,7 +89,7 @@ exports.startTest = async (req, res) => {
           title: test.title,
           type: test.type,
           config: test.config,
-          questions: test.questions
+          questions: mapQuestionDocsForLanguage(test.questions, language)
         }
       }
     });
@@ -231,7 +237,21 @@ exports.submitTest = async (req, res) => {
     test.avgScore = allAttempts.reduce((sum, a) => sum + a.results.percentage, 0) / allAttempts.length;
     await test.save();
 
-    res.json({ success: true, data: attempt });
+    const attemptObject = attempt.toObject ? attempt.toObject() : attempt;
+    const language = getPreferredLanguage(req);
+    if (attemptObject?.testId?.questions) {
+      attemptObject.testId.questions = mapQuestionDocsForLanguage(attemptObject.testId.questions, language);
+    }
+    if (Array.isArray(attemptObject?.answers)) {
+      attemptObject.answers = attemptObject.answers.map((answer) => ({
+        ...answer,
+        questionId: answer?.questionId && typeof answer.questionId === 'object'
+          ? mapQuestionDocsForLanguage([answer.questionId], language)[0]
+          : answer.questionId,
+      }));
+    }
+
+    res.json({ success: true, data: attemptObject });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -251,7 +271,21 @@ exports.getAttempt = async (req, res) => {
       return res.status(404).json({ message: 'Attempt not found' });
     }
 
-    res.json({ success: true, data: attempt });
+    const attemptObject = attempt.toObject ? attempt.toObject() : attempt;
+    const language = getPreferredLanguage(req);
+    if (attemptObject?.testId?.questions) {
+      attemptObject.testId.questions = mapQuestionDocsForLanguage(attemptObject.testId.questions, language);
+    }
+    if (Array.isArray(attemptObject?.answers)) {
+      attemptObject.answers = attemptObject.answers.map((answer) => ({
+        ...answer,
+        questionId: answer?.questionId && typeof answer.questionId === 'object'
+          ? mapQuestionDocsForLanguage([answer.questionId], language)[0]
+          : answer.questionId,
+      }));
+    }
+
+    res.json({ success: true, data: attemptObject });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -336,7 +370,10 @@ exports.createCustomTest = async (req, res) => {
     const ensuredQuestions = await Promise.all(importedQuestions.map(async (iq) => {
       const options = ['A', 'B', 'C', 'D'].map((key) => ({
         key,
-        text: { en: iq?.options?.[key] || '' },
+        text: {
+          en: iq?.options?.[key] || '',
+          ...(iq?.optionsHi?.[key] ? { hi: iq.optionsHi[key] } : {}),
+        },
         isCorrect: iq?.correct_option === key,
       }));
 
@@ -345,10 +382,16 @@ exports.createCustomTest = async (req, res) => {
         {
           $setOnInsert: {
             questionId: String(iq.questionId),
-            question: { en: String(iq.question || '').trim() || 'Question text unavailable' },
+            question: {
+              en: String(iq.question || '').trim() || 'Question text unavailable',
+              ...(iq?.questionHi ? { hi: String(iq.questionHi).trim() } : {}),
+            },
             options,
             correctAnswer: iq?.correct_option || null,
-            explanation: { en: String(iq.explanation || '').trim() || 'No explanation available.' },
+            explanation: {
+              en: String(iq.explanation || '').trim() || 'No explanation available.',
+              ...(iq?.explanationHi ? { hi: String(iq.explanationHi).trim() } : {}),
+            },
             subject: String(iq.subject || '').toLowerCase(),
             chapterId: String(iq.chapterId || selectedChapters[0] || 'unknown'),
             difficulty: ['easy', 'medium', 'hard'].includes(String(iq.difficulty || '').toLowerCase())

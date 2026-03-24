@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const FormulaCardSchema = new mongoose.Schema({
     title: { type: String, required: true, trim: true },
     imgUrl: { type: String, required: true },
+    hindiImgUrl: { type: String, trim: true, default: '' },
     subjectTitle: { type: String, required: true, index: true },
     chapterTitle: { type: String, required: true, index: true },
     topicTitle: { type: String, required: true, index: true },
@@ -15,3 +16,4 @@ const FormulaCardSchema = new mongoose.Schema({
 FormulaCardSchema.index({ subjectTitle: 1, chapterTitle: 1, topicTitle: 1 });
 
 module.exports = mongoose.model('FormulaCard', FormulaCardSchema);
+

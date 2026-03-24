@@ -6,6 +6,10 @@ const ImportedCurriculumQuizRun = require('../models/ImportedCurriculumQuizRun')
 const ToppersResourceLog = require('../models/ToppersResourceLog');
 const ToppersResourceReaction = require('../models/ToppersResourceReaction');
 const UserQuestion = require('../models/UserQuestion');
+const {
+    getPreferredLanguage,
+    mapImportedQuestionsForLanguage,
+} = require('../utils/languagePreference');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
 const RUN_EXPIRY_HOURS = 24;
@@ -439,7 +443,10 @@ exports.startCurriculumRun = async (req, res) => {
             });
         }
 
-        const questions = await getImportedQuestionsByUIDs(run.uids || []);
+        const questions = mapImportedQuestionsForLanguage(
+            await getImportedQuestionsByUIDs(run.uids || []),
+            getPreferredLanguage(req)
+        );
         res.status(200).json({
             success: true,
             data: {
@@ -465,7 +472,10 @@ exports.getCurriculumRun = async (req, res) => {
             return res.status(404).json({ success: false, error: 'Run not found' });
         }
 
-        const questions = await getImportedQuestionsByUIDs(run.uids || []);
+        const questions = mapImportedQuestionsForLanguage(
+            await getImportedQuestionsByUIDs(run.uids || []),
+            getPreferredLanguage(req)
+        );
         res.status(200).json({
             success: true,
             data: {
@@ -787,7 +797,7 @@ exports.getQuestionsByUIDs = async (req, res) => {
                 total: uidList.length,
                 totalPages: Math.ceil(uidList.length / limitNum),
             },
-            data: ordered,
+            data: mapImportedQuestionsForLanguage(ordered, getPreferredLanguage(req)),
         });
     } catch (err) {
         console.error('getQuestionsByUIDs error:', err);

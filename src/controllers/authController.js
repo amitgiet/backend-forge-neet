@@ -83,7 +83,7 @@ exports.register = async (req, res, next) => {
             }],
             profile: {
                 class: userClass || 12,
-                preferredLanguage: preferredLanguage || 'en'
+                preferredLanguage: preferredLanguage || 'hi'
             }
         });
 
@@ -844,6 +844,9 @@ const sendTokenResponse = (user, statusCode, res) => {
                 email: user.email,
                 subscription: user.subscription.plan,
                 primaryExam: user.primaryExam,
+                profile: {
+                    preferredLanguage: user.profile?.preferredLanguage || 'hi'
+                },
                 onboardingCompleted: user.onboarding?.completed || false,
                 onboardingStep: user.onboarding?.currentStep || 1
             }
@@ -888,7 +891,7 @@ exports.googleLogin = async (req, res, next) => {
                 }],
                 profile: {
                     class: 12,
-                    preferredLanguage: 'en'
+                    preferredLanguage: 'hi'
                 }
             });
         }

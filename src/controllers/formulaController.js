@@ -4,6 +4,10 @@ const FormulaCard = require('../models/FormulaCard');
 const FormulaProgress = require('../models/FormulaProgress');
 const ErrorResponse = require('../utils/errorResponse');
 const https = require('https');
+const {
+    getPreferredLanguage,
+    pickFormulaImageForLanguage,
+} = require('../utils/languagePreference');
 
 const extractDriveFileId = (urlValue = '') => {
     const url = String(urlValue || '').trim();
@@ -186,11 +190,13 @@ exports.getFormulaTopics = async (req, res, next) => {
 exports.getFormulaCards = async (req, res, next) => {
     try {
         const { topicTitle } = req.params;
+        const language = getPreferredLanguage(req);
 
         const cardsRaw = await FormulaCard.find({ topicTitle }).sort({ position: 1 }).lean();
         const cards = cardsRaw.map((card) => ({
             ...card,
-            imgUrl: toDirectFormulaImageUrl(card.imgUrl)
+            imgUrl: toDirectFormulaImageUrl(pickFormulaImageForLanguage(card, language)),
+            hindiImgUrl: toDirectFormulaImageUrl(card.hindiImgUrl || '')
         }));
 
         res.status(200).json({
@@ -246,8 +252,9 @@ exports.updateCardProgress = async (req, res, next) => {
 exports.getTopicProgress = async (req, res, next) => {
     try {
         const { topicTitle } = req.params;
+        const language = getPreferredLanguage(req);
         const rows = await FormulaProgress.find({ userId: req.user.id, topicTitle })
-            .populate('cardId', 'title imgUrl subjectTitle chapterTitle topicTitle position')
+            .populate('cardId', 'title imgUrl hindiImgUrl subjectTitle chapterTitle topicTitle position')
             .lean();
 
         const progress = rows.map((row) => {
@@ -255,7 +262,7 @@ exports.getTopicProgress = async (req, res, next) => {
             return {
                 ...row,
                 cardId: card?._id || row.cardId,
-                imgUrl: toDirectFormulaImageUrl(card?.imgUrl || '')
+                imgUrl: toDirectFormulaImageUrl(pickFormulaImageForLanguage(card, language))
             };
         });
         res.status(200).json({
@@ -271,15 +278,16 @@ exports.getTopicProgress = async (req, res, next) => {
 exports.getChapterProgressSummary = async (req, res, next) => {
     try {
         const { chapterTitle } = req.params;
+        const language = getPreferredLanguage(req);
         const rows = await FormulaProgress.find({ userId: req.user.id, chapterTitle })
-            .populate('cardId', 'title imgUrl subjectTitle chapterTitle topicTitle position')
+            .populate('cardId', 'title imgUrl hindiImgUrl subjectTitle chapterTitle topicTitle position')
             .lean();
         const progress = rows.map((row) => {
             const card = row.cardId && typeof row.cardId === 'object' ? row.cardId : null;
             return {
                 ...row,
                 cardId: card?._id || row.cardId,
-                imgUrl: toDirectFormulaImageUrl(card?.imgUrl || '')
+                imgUrl: toDirectFormulaImageUrl(pickFormulaImageForLanguage(card, language))
             };
         });
         res.status(200).json({
@@ -290,3 +298,4 @@ exports.getChapterProgressSummary = async (req, res, next) => {
         next(error);
     }
 };
+
