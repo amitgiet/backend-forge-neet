@@ -16,6 +16,7 @@ const {
     logResource,
     toggleResourceReaction,
     getResourceReactions,
+    getQuestionImageFallback,
 } = require('../controllers/curriculumController');
 
 // All curriculum routes require authentication
@@ -52,5 +53,6 @@ router.post('/log-resource', logResource);
 // Resource reactions for Toppers Corner
 router.post('/toggle-reaction', toggleResourceReaction);
 router.get('/reactions/:chapterId', getResourceReactions);
+router.get('/image-fallback/:subject/:questionId', getQuestionImageFallback);
 
 module.exports = router;

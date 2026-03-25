@@ -1,0 +1,158 @@
+========================================================
+ DATABASE: Bio (uploads/biology_questions.db)
+========================================================
+  Total Tables: 2
+  Tables: ['biology', 'biologyHindi']
+
+  --- TABLE: biology ---
+    Columns: uniqueId, question, answer, explanation, topicName, difficultyLevel, optionA, optionB, optionC, optionD, quizType, syllabusUpdate, ncert22Page, ncert23Page
+    Sample Row (1st item):
+      uniqueId: 3
+      question: Which one of the statements is not valid for aerosols
+(NEET 2017)
+      answer: They cause increased agricultural productivity
+      explanation: Aerosol are harmful environmental pollutants which have negative effects on Agriculture. Aerosol is ...
+      topicName: Ecology >> Environmental Issues >> Previous Year Questions 1
+      difficultyLevel: 3
+      optionA: They alter rainfall and monsoon patterns
+      optionB: They cause increased agricultural productivity
+      optionC: They have negative impact on agricultural land
+      optionD: They are harmful to human health
+      quizType: mcq
+      syllabusUpdate: DELETED
+      ncert22Page: 
+      ncert23Page: 
+
+  --- TABLE: biologyHindi ---
+    Columns: uniqueId, question, answer, explanation, topicName, difficultyLevel, optionA, optionB, optionC, optionD, quizType, syllabusUpdate, ncert22Page, ncert23Page
+    Sample Row (1st item):
+      uniqueId: 150101
+      question: विकास दो प्रक्रियाओं का योग है?
+      answer: वृद्धि एवं विभेदन
+      explanation: विकास दो प्रक्रियाओं का योग है: वृद्धि और विभेदन। शुरुआत में यह जानना अनिवार्य है कि एक परिपक्व वृक्...
+      topicName: पादपकार्यिकी >> पादप वृद्धि  एंव  परिवर्धन  >> परिचय
+      difficultyLevel: 2
+      optionA: वनस्पति शरीर क्रिया-विज्ञान
+      optionB: तरक्की और विकास
+      optionC: पुनर्विकास और विभेदन
+      optionD: वृद्धि एवं विभेदन
+      quizType: mcq
+      syllabusUpdate: NEW
+      ncert22Page: None
+      ncert23Page: None
+
+========================================================
+ DATABASE: Chem (uploads/chemistry_questions.db)
+========================================================
+  Total Tables: 2
+  Tables: ['chemistry', 'chemistryHindi']
+
+  --- TABLE: chemistry ---
+    Columns: uniqueId, question, answer, explanation, topicName, difficultyLevel, optionA, optionB, optionC, optionD, quizType, syllabusUpdate, ncert22Page, ncert23Page
+    Sample Row (1st item):
+      uniqueId: 1
+      question: A : FeO is basic in character.
+R : Oxides of Transition metals are basic when metal is in lower oxid...
+      answer: Both A and R are true and R is the correct explanation of A
+      explanation: Both are correct and correct explanation (fact).
+      topicName: Inorganic chemistry >> The d- and f-Block Elements >> Assertion & Reason
+      difficultyLevel: 1
+      optionA: Both A and R are true and R is the correct explanation of A
+      optionB: Both A & R are false
+      optionC: A is true but R is false
+      optionD: Both A and R are true but R is NOT the correct explanation of A
+      quizType: mcq
+      syllabusUpdate: NEW
+      ncert22Page: 12-231
+      ncert23Page: 12-105
+
+  --- TABLE: chemistryHindi ---
+    Columns: uniqueId, question, answer, explanation, topicName, difficultyLevel, optionA, optionB, optionC, optionD, quizType, syllabusUpdate, ncert22Page, ncert23Page
+    Sample Row (1st item):
+      uniqueId: 10120101
+      question: अन्य कार्बन परमाणुओं के साथ आबंध बनाने के लिए कार्बन के गुण को ___ कहा जाता है?
+      answer: श्रृंखलन
+      explanation: तत्व कार्बन में अद्वितीय संपत्ति है जिसे श्रृंखलन कहा जाता है जिसके कारण यह अन्य कार्बन परमाणुओं के ...
+      topicName: कार्बनिक रसायन विज्ञान >> कार्बनिक रसायन: कुछ आधरभूत सिद्धांत तथा तकनीके >> सामान्य परिचय
+      difficultyLevel: 1
+      optionA: कार्बोनेशन
+      optionB: श्रृंखलन
+      optionC: चतुसंयोजक
+      optionD: सहसंयोजक आबंध
+      quizType: mcq
+      syllabusUpdate: NEW
+      ncert22Page: None
+      ncert23Page: None
+
+========================================================
+ DATABASE: Phy (uploads/npcm_phy_database.db)
+========================================================
+  Total Tables: 1
+  Tables: ['npcmPhy']
+
+  --- TABLE: npcmPhy ---
+    Columns: uniqueId, question, answer, explanation, topicName, difficultyLevel, optionA, optionB, optionC, optionD, quizType, syllabusUpdate
+    Sample Row (1st item):
+      uniqueId: 1000030101
+      question: n0301, n0302, n0303, n0304, n0305, n0306, n0307, n0308, n0309, n0310, n0311, n0312, n0313, n0314, n0...
+      answer: 
+      explanation: 
+      topicName: Law Of Motion >> Notes >> Notes
+      difficultyLevel: 101
+      optionA: 
+      optionB: 
+      optionC: 
+      optionD: 
+      quizType: notes
+      syllabusUpdate: NULL
+
+========================================================
+ DATABASE: Cache (uploads/subject_cache.db)
+========================================================
+  Total Tables: 6
+  Tables: ['subjects', 'sqlite_sequence', 'chapters', 'topics', 'subtopics', 'uids']
+
+  --- TABLE: subjects ---
+    Columns: id, name, image_url
+    Sample Row (1st item):
+      id: 46
+      name: Biology
+      image_url: assets/images/biology.svg
+
+  --- TABLE: sqlite_sequence ---
+    Columns: name, seq
+    Sample Row (1st item):
+      name: subjects
+      seq: 48
+
+  --- TABLE: chapters ---
+    Columns: id, name, subject_id, is_free
+    Sample Row (1st item):
+      id: 541
+      name: DIVERSITY IN LIVING WORLD
+      subject_id: 46
+      is_free: 1
+
+  --- TABLE: topics ---
+    Columns: id, name, chapter_id, is_bookmark
+    Sample Row (1st item):
+      id: 6001
+      name: The Living World
+      chapter_id: 541
+      is_bookmark: 0
+
+  --- TABLE: subtopics ---
+    Columns: id, name, topic_id, status
+    Sample Row (1st item):
+      id: 72241
+      name: Definition Of Living  (Old NCERT) and Biodiversity 
+      topic_id: 6001
+      status: 
+
+  --- TABLE: uids ---
+    Columns: id, uid, subtopic_id
+    Sample Row (1st item):
+      id: 646887
+      uid: 10104
+      subtopic_id: 72241
+

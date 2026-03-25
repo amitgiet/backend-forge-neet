@@ -1,3 +1,4 @@
+const axios = require('axios');
 const ImportedCurriculum = require('../models/ImportedCurriculum');
 const ImportedQuestion = require('../models/ImportedQuestion');
 const ImportedSubtopicAttempt = require('../models/ImportedSubtopicAttempt');
@@ -114,15 +115,37 @@ const expireStaleRuns = async (userId) => {
     });
 };
 
-const getImportedQuestionsByUIDs = async (uids = []) => {
+const getImportedQuestionsByUIDs = async (uids = [], subject = null) => {
     const uidList = Array.isArray(uids) ? uids.map((u) => String(u)).filter(Boolean) : [];
     if (uidList.length === 0) return [];
-    const questionDocs = await ImportedQuestion.find({ questionId: { $in: uidList } }).lean();
+
+    const query = { questionId: { $in: uidList }, isActive: true };
+    if (subject) {
+        query.subject = String(subject).toLowerCase();
+    }
+
+    const questionDocs = await ImportedQuestion.find(query).lean();
+
+    // Key by "subject|questionId" to avoid collisions when the same questionId
+    // exists across multiple subjects (the unique index is on subject+questionId+language).
+    const normalizedSubject = subject ? String(subject).toLowerCase() : null;
     const questionMap = {};
     questionDocs.forEach((q) => {
-        questionMap[String(q.questionId)] = q;
+        const subKey = String(q.subject || '').toLowerCase();
+        const mapKey = normalizedSubject ? String(q.questionId) : `${subKey}|${String(q.questionId)}`;
+        questionMap[mapKey] = q;
     });
-    return uidList.map((uid) => questionMap[uid]).filter(Boolean);
+
+    return uidList
+        .map((uid) => {
+            const mapKey = normalizedSubject ? uid : (() => {
+                // Without a subject filter, find the first match
+                const matchKey = Object.keys(questionMap).find((k) => k.endsWith(`|${uid}`));
+                return matchKey;
+            })();
+            return mapKey ? questionMap[mapKey] : undefined;
+        })
+        .filter(Boolean);
 };
 
 const isImportedAnswerCorrect = (question, selectedIndex) => {
@@ -444,7 +467,7 @@ exports.startCurriculumRun = async (req, res) => {
         }
 
         const questions = mapImportedQuestionsForLanguage(
-            await getImportedQuestionsByUIDs(run.uids || []),
+            await getImportedQuestionsByUIDs(run.uids || [], run.subject),
             getPreferredLanguage(req)
         );
         res.status(200).json({
@@ -473,7 +496,7 @@ exports.getCurriculumRun = async (req, res) => {
         }
 
         const questions = mapImportedQuestionsForLanguage(
-            await getImportedQuestionsByUIDs(run.uids || []),
+            await getImportedQuestionsByUIDs(run.uids || [], run.subject),
             getPreferredLanguage(req)
         );
         res.status(200).json({
@@ -595,7 +618,7 @@ exports.submitCurriculumRun = async (req, res) => {
             run.remainingSeconds = Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : run.remainingSeconds;
         }
 
-        const questions = await getImportedQuestionsByUIDs(run.uids || []);
+        const questions = await getImportedQuestionsByUIDs(run.uids || [], run.subject);
         const score = evaluateRunScore(questions, run.answers || []);
 
         run.correctAnswers = score.correctAnswers;
@@ -761,10 +784,13 @@ exports.trackSubTopicAttempt = async (req, res) => {
 
 exports.getQuestionsByUIDs = async (req, res) => {
     try {
-        const { uids, page = 1, limit = 20 } = req.query;
+        const { uids, subject, page = 1, limit = 20 } = req.query;
 
         if (!uids) {
             return res.status(400).json({ success: false, error: 'uids query param is required' });
+        }
+        if (!subject) {
+            return res.status(400).json({ success: false, error: 'subject query param is required' });
         }
 
         const uidList = String(uids)
@@ -783,6 +809,8 @@ exports.getQuestionsByUIDs = async (req, res) => {
 
         const questions = await ImportedQuestion.find({
             questionId: { $in: paginatedUIDs.map(String) },
+            subject: String(subject).toLowerCase(),
+            isActive: true,
         }).lean();
 
         const questionMap = {};
@@ -919,5 +947,34 @@ exports.getResourceReactions = async (req, res) => {
     } catch (err) {
         console.error('getResourceReactions error:', err);
         res.status(500).json({ success: false, error: 'Server error' });
+    }
+};
+/**
+ * @desc    Proxy to Memoneet API for image fallback (fixes CORS)
+ * @route   GET /api/v1/curriculum/image-fallback/:subject/:questionId
+ * @access  Private
+ */
+exports.getQuestionImageFallback = async (req, res) => {
+    try {
+        const { subject, questionId } = req.params;
+        
+        const response = await axios.post('https://memoneet.xyz/api/get-question-images', {
+            subject: subject.toLowerCase(),
+            uid: String(questionId)
+        }, { timeout: 10000 });
+
+        const data = response.data;
+        const imageUrl = Array.isArray(data.question) ? data.question[0] : null;
+        
+        res.status(200).json({
+            success: true,
+            imageUrl
+        });
+    } catch (error) {
+        console.error('Image fallback proxy failed:', error.message);
+        res.status(200).json({
+            success: false,
+            imageUrl: null
+        });
     }
 };

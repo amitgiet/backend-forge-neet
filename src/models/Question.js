@@ -83,7 +83,7 @@ const QuestionSchema = new mongoose.Schema({
     // Question type (5 scalable types)
     questionType: {
         type: String,
-        enum: ['mcq', 'fill-blank', 'match', 'diagram-label', 'numeric'],
+        enum: ['mcq', 'fillup', 'match', 'order', 'flashcard', 'video', 'fill-blank', 'diagram-label', 'numeric'],
         default: 'mcq'
     },
 
@@ -146,6 +146,21 @@ const QuestionSchema = new mongoose.Schema({
 
     // Image/diagram URL (if applicable)
     imageUrl: String,
+
+    imageId: {
+        type: String,
+        default: null,
+    },
+
+    isSupported: {
+        type: Boolean,
+        default: true,
+    },
+
+    unsupportedReason: {
+        type: String,
+        default: null,
+    },
 
     // Status
     isActive: {

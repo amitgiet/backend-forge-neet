@@ -17,6 +17,7 @@ const {
     getPreferredLanguage,
     mapImportedQuestionsForLanguage,
 } = require('../utils/languagePreference');
+const { serializeImportedQuestionForClient } = require('../utils/questionPayload');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
 const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'];
@@ -122,7 +123,8 @@ exports.filterQuestions = async (req, res) => {
                 totalPages: Math.ceil(total / limit),
                 hasNext: page * limit < total,
             },
-            data: mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req)),
+            data: mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req))
+                .map((question) => serializeImportedQuestionForClient(question)),
         });
     } catch (err) {
         console.error('filterQuestions error:', err);
@@ -148,7 +150,8 @@ exports.getPYQs = async (req, res) => {
             limit,
         });
 
-        const localizedQuestions = mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req));
+        const localizedQuestions = mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req))
+            .map((question) => serializeImportedQuestionForClient(question));
 
         // Group by year for UI convenience
         const byYear = {};
@@ -239,7 +242,7 @@ exports.generateCustomTest = async (req, res) => {
             const finalQuestions = mapImportedQuestionsForLanguage(
                 questions.slice(0, countNum),
                 getPreferredLanguage(req)
-            );
+            ).map((question) => serializeImportedQuestionForClient(question));
 
             if (finalQuestions.length === 0) {
                 return res.status(404).json({
@@ -318,7 +321,8 @@ exports.generateCustomTest = async (req, res) => {
                 durationSeconds,
                 filters: { subject: subjectList[0], chapterId, subTopics, topics, difficulty, isPYQ, pyqYear, pyqExam },
             },
-            data: mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req)),
+            data: mapImportedQuestionsForLanguage(questions, getPreferredLanguage(req))
+                .map((question) => serializeImportedQuestionForClient(question)),
         });
     } catch (err) {
         console.error('generateCustomTest error:', err);

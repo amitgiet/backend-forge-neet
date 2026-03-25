@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { isQuestionTypeGraded, normalizeQuestionType } = require('../utils/questionPayload');
 
 const testAttemptSchema = new mongoose.Schema({
   userId: {
@@ -34,8 +35,19 @@ const testAttemptSchema = new mongoose.Schema({
       ref: 'Question'
     },
     selectedOption: String, // 'A', 'B', 'C', 'D' or answer text
+    answerType: String,
+    answerPayload: mongoose.Schema.Types.Mixed,
     isCorrect: Boolean,
     marksAwarded: Number,
+    evaluationStatus: {
+      type: String,
+      enum: ['correct', 'incorrect', 'partial', 'ungraded', null],
+      default: null,
+    },
+    evaluationReason: {
+      type: String,
+      default: null,
+    },
     timeSpent: Number, // seconds spent on this question
     isMarkedForReview: Boolean,
     attemptedAt: Date
@@ -44,9 +56,14 @@ const testAttemptSchema = new mongoose.Schema({
   // Results
   results: {
     totalQuestions: Number,
+    gradedQuestions: Number,
+    ungradedQuestions: Number,
     attempted: Number,
+    attemptedGraded: Number,
+    attemptedUngraded: Number,
     correct: Number,
     incorrect: Number,
+    partial: Number,
     skipped: Number,
     markedForReview: Number,
     
@@ -61,6 +78,7 @@ const testAttemptSchema = new mongoose.Schema({
       attempted: Number,
       correct: Number,
       incorrect: Number,
+      partial: Number,
       marks: Number,
       accuracy: Number
     }],
@@ -72,6 +90,7 @@ const testAttemptSchema = new mongoose.Schema({
       total: Number,
       correct: Number,
       incorrect: Number,
+      partial: Number,
       accuracy: Number
     }],
     
@@ -88,6 +107,13 @@ const testAttemptSchema = new mongoose.Schema({
       avgTimePerQuestion: Number,
       fastestQuestion: Number,
       slowestQuestion: Number
+    },
+
+    completionWise: {
+      flashcardCompleted: Number,
+      flashcardTotal: Number,
+      videoCompleted: Number,
+      videoTotal: Number
     },
     
     // Rank (calculated after submission)
@@ -116,9 +142,14 @@ testAttemptSchema.index({ testId: 1, 'results.percentage': -1 }); // For ranking
 testAttemptSchema.methods.calculateResults = function(questions) {
   const results = {
     totalQuestions: this.answers.length,
+    gradedQuestions: 0,
+    ungradedQuestions: 0,
     attempted: 0,
+    attemptedGraded: 0,
+    attemptedUngraded: 0,
     correct: 0,
     incorrect: 0,
+    partial: 0,
     skipped: 0,
     markedForReview: 0,
     totalMarks: 0,
@@ -127,7 +158,13 @@ testAttemptSchema.methods.calculateResults = function(questions) {
     subjectWise: [],
     chapterWise: [],
     difficultyWise: { easy: {}, medium: {}, hard: {} },
-    timeAnalysis: {}
+    timeAnalysis: {},
+    completionWise: {
+      flashcardCompleted: 0,
+      flashcardTotal: 0,
+      videoCompleted: 0,
+      videoTotal: 0
+    }
   };
   
   const subjectMap = {};
@@ -135,11 +172,27 @@ testAttemptSchema.methods.calculateResults = function(questions) {
   let totalTime = 0;
   
   this.answers.forEach(answer => {
-    if (answer.selectedOption) {
+    const hasStructuredAnswer =
+      answer?.answerPayload &&
+      ((typeof answer.answerPayload === 'object' && Object.keys(answer.answerPayload).length > 0) || typeof answer.answerPayload !== 'object');
+    const attempted = Boolean(answer.selectedOption) || hasStructuredAnswer;
+
+    const question = questions.find(q => q._id.toString() === answer.questionId.toString());
+    const type = normalizeQuestionType(question?.questionType || question?.type);
+    const isGraded = isQuestionTypeGraded(type);
+
+    if (isGraded) results.gradedQuestions += 1;
+    else results.ungradedQuestions += 1;
+
+    if (attempted) {
       results.attempted++;
+      if (isGraded) results.attemptedGraded++;
+      else results.attemptedUngraded++;
       if (answer.isCorrect) {
         results.correct++;
-      } else {
+      } else if (answer.evaluationStatus === 'partial') {
+        results.partial++;
+      } else if (answer.evaluationStatus !== 'ungraded') {
         results.incorrect++;
       }
     } else {
@@ -153,33 +206,45 @@ testAttemptSchema.methods.calculateResults = function(questions) {
     results.marksObtained += answer.marksAwarded || 0;
     totalTime += answer.timeSpent || 0;
     
-    // Find question details
-    const question = questions.find(q => q._id.toString() === answer.questionId.toString());
     if (question) {
-      // Subject-wise
-      if (!subjectMap[question.subject]) {
-        subjectMap[question.subject] = { total: 0, attempted: 0, correct: 0, incorrect: 0, marks: 0 };
+      if (!isGraded) {
+        if (type === 'flashcard') {
+          results.completionWise.flashcardTotal += 1;
+          if (attempted) results.completionWise.flashcardCompleted += 1;
+        } else if (type === 'video') {
+          results.completionWise.videoTotal += 1;
+          if (attempted) results.completionWise.videoCompleted += 1;
+        }
       }
-      subjectMap[question.subject].total++;
-      if (answer.selectedOption) subjectMap[question.subject].attempted++;
-      if (answer.isCorrect) subjectMap[question.subject].correct++;
-      else if (answer.selectedOption) subjectMap[question.subject].incorrect++;
-      subjectMap[question.subject].marks += answer.marksAwarded || 0;
-      
-      // Chapter-wise
-      const chapterKey = `${question.subject}-${question.chapter}`;
-      if (!chapterMap[chapterKey]) {
-        chapterMap[chapterKey] = { chapter: question.chapter, subject: question.subject, total: 0, correct: 0, incorrect: 0 };
+
+      if (isGraded) {
+        // Subject-wise score math should ignore ungraded learning items.
+        if (!subjectMap[question.subject]) {
+          subjectMap[question.subject] = { total: 0, attempted: 0, correct: 0, incorrect: 0, partial: 0, marks: 0 };
+        }
+        subjectMap[question.subject].total++;
+        if (attempted) subjectMap[question.subject].attempted++;
+        if (answer.isCorrect) subjectMap[question.subject].correct++;
+        else if (attempted && answer.evaluationStatus === 'partial') subjectMap[question.subject].partial++;
+        else if (attempted && answer.evaluationStatus !== 'ungraded') subjectMap[question.subject].incorrect++;
+        subjectMap[question.subject].marks += answer.marksAwarded || 0;
+
+        // Chapter-wise score math should also ignore ungraded learning items.
+        const chapterKey = `${question.subject}-${question.chapter}`;
+        if (!chapterMap[chapterKey]) {
+          chapterMap[chapterKey] = { chapter: question.chapter, subject: question.subject, total: 0, correct: 0, incorrect: 0, partial: 0 };
+        }
+        chapterMap[chapterKey].total++;
+        if (answer.isCorrect) chapterMap[chapterKey].correct++;
+        else if (attempted && answer.evaluationStatus === 'partial') chapterMap[chapterKey].partial++;
+        else if (attempted && answer.evaluationStatus !== 'ungraded') chapterMap[chapterKey].incorrect++;
       }
-      chapterMap[chapterKey].total++;
-      if (answer.isCorrect) chapterMap[chapterKey].correct++;
-      else if (answer.selectedOption) chapterMap[chapterKey].incorrect++;
     }
   });
   
   // Calculate totals
-  results.totalMarks = results.totalQuestions * 4; // Assuming 4 marks per question
-  results.percentage = (results.marksObtained / results.totalMarks) * 100;
+  results.totalMarks = results.gradedQuestions * 4;
+  results.percentage = results.totalMarks > 0 ? (results.marksObtained / results.totalMarks) * 100 : 0;
   
   // Subject-wise accuracy
   results.subjectWise = Object.keys(subjectMap).map(subject => ({
@@ -197,9 +262,9 @@ testAttemptSchema.methods.calculateResults = function(questions) {
   // Time analysis
   results.timeAnalysis = {
     totalTime,
-    avgTimePerQuestion: totalTime / results.totalQuestions,
-    fastestQuestion: Math.min(...this.answers.map(a => a.timeSpent || 0)),
-    slowestQuestion: Math.max(...this.answers.map(a => a.timeSpent || 0))
+    avgTimePerQuestion: results.totalQuestions > 0 ? totalTime / results.totalQuestions : 0,
+    fastestQuestion: this.answers.length > 0 ? Math.min(...this.answers.map(a => a.timeSpent || 0)) : 0,
+    slowestQuestion: this.answers.length > 0 ? Math.max(...this.answers.map(a => a.timeSpent || 0)) : 0
   };
   
   this.results = results;

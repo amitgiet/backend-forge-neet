@@ -1,0 +1,53 @@
+--- Bio (uploads/biology_questions.db) ---
+  uniqueId: 3
+  question: Which one of the statements is not valid for aerosols
+(NEET 2017)
+  answer: They cause increased agricultural productivity
+  explanation: Aerosol are harmful environmental pollutants which have negative effects on Agriculture. Aerosol is the colloid of fine solid particles in the air such as fog. It is type of pollutant that hinders the sunlight to reach the plants and thus, plants are not able to trap light for photosynthesis. In the absence of photosynthesis the agricultural productivity get decreased.
+
+The following are the environmental, agricultural and health issues caused by aerosols:
+- They are harmful to human health
+- They alter rainfall and monsoon patterns
+- They have a negative impact on agricultural land causing a decrease in agricultural productivity.
+  topicName: Ecology >> Environmental Issues >> Previous Year Questions 1
+  difficultyLevel: 3
+  optionA: They alter rainfall and monsoon patterns
+  optionB: They cause increased agricultural productivity
+  optionC: They have negative impact on agricultural land
+  optionD: They are harmful to human health
+  quizType: mcq
+  syllabusUpdate: DELETED
+  ncert22Page: 
+  ncert23Page: 
+
+--- Chem (uploads/chemistry_questions.db) ---
+  uniqueId: 1
+  question: A : FeO is basic in character.
+R : Oxides of Transition metals are basic when metal is in lower oxidation state.
+  answer: Both A and R are true and R is the correct explanation of A
+  explanation: Both are correct and correct explanation (fact).
+  topicName: Inorganic chemistry >> The d- and f-Block Elements >> Assertion & Reason
+  difficultyLevel: 1
+  optionA: Both A and R are true and R is the correct explanation of A
+  optionB: Both A & R are false
+  optionC: A is true but R is false
+  optionD: Both A and R are true but R is NOT the correct explanation of A
+  quizType: mcq
+  syllabusUpdate: NEW
+  ncert22Page: 12-231
+  ncert23Page: 12-105
+
+--- Phy (uploads/npcm_phy_database.db) ---
+  uniqueId: 1000030101
+  question: n0301, n0302, n0303, n0304, n0305, n0306, n0307, n0308, n0309, n0310, n0311, n0312, n0313, n0314, n0315, n0316, n0317, n0318, n0319, n0320, n0321, n0322, n0323, n0324, n0325, n0326, n0327, n0328, n0329
+  answer: 
+  explanation: 
+  topicName: Law Of Motion >> Notes >> Notes
+  difficultyLevel: 101
+  optionA: 
+  optionB: 
+  optionC: 
+  optionD: 
+  quizType: notes
+  syllabusUpdate: NULL
+

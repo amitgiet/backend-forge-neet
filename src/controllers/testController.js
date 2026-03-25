@@ -6,8 +6,14 @@ const ImportedCurriculum = require('../models/ImportedCurriculum');
 const UserQuestion = require('../models/UserQuestion');
 const {
   getPreferredLanguage,
-  mapQuestionDocsForLanguage,
 } = require('../utils/languagePreference');
+const {
+  normalizeQuestionType,
+  buildTypeDataFromImported,
+  serializeQuestionDocForClient,
+  evaluateQuestionAttempt,
+  answerPayloadHasValue,
+} = require('../utils/questionPayload');
 
 // Get all tests with filters
 exports.getTests = async (req, res) => {
@@ -67,8 +73,12 @@ exports.startTest = async (req, res) => {
       answers: test.questions.map(q => ({
         questionId: q._id,
         selectedOption: null,
+        answerType: normalizeQuestionType(q.questionType),
+        answerPayload: null,
         isCorrect: false,
         marksAwarded: 0,
+        evaluationStatus: null,
+        evaluationReason: null,
         timeSpent: 0,
         isMarkedForReview: false
       }))
@@ -89,7 +99,7 @@ exports.startTest = async (req, res) => {
           title: test.title,
           type: test.type,
           config: test.config,
-          questions: mapQuestionDocsForLanguage(test.questions, language)
+          questions: test.questions.map((question) => serializeQuestionDocForClient(question, language))
         }
       }
     });
@@ -102,7 +112,7 @@ exports.startTest = async (req, res) => {
 exports.saveAnswer = async (req, res) => {
   try {
     const { attemptId } = req.params;
-    const { questionId, selectedOption, timeSpent, isMarkedForReview } = req.body;
+    const { questionId, selectedOption, answerType, answerPayload, timeSpent, isMarkedForReview } = req.body;
 
     const attempt = await TestAttempt.findById(attemptId);
     if (!attempt) {
@@ -116,7 +126,9 @@ exports.saveAnswer = async (req, res) => {
     // Find and update answer
     const answerIndex = attempt.answers.findIndex(a => a.questionId.toString() === questionId);
     if (answerIndex !== -1) {
-      attempt.answers[answerIndex].selectedOption = selectedOption;
+      attempt.answers[answerIndex].selectedOption = selectedOption || null;
+      attempt.answers[answerIndex].answerType = answerType || attempt.answers[answerIndex].answerType || null;
+      attempt.answers[answerIndex].answerPayload = answerPayload ?? null;
       attempt.answers[answerIndex].timeSpent = timeSpent;
       attempt.answers[answerIndex].isMarkedForReview = isMarkedForReview;
       attempt.answers[answerIndex].attemptedAt = new Date();
@@ -155,9 +167,13 @@ exports.submitTest = async (req, res) => {
     // Evaluate answers
     attempt.answers.forEach(answer => {
       const question = questions.find(q => q._id.toString() === answer.questionId.toString());
-      if (question && answer.selectedOption) {
-        answer.isCorrect = answer.selectedOption === question.correctAnswer;
-        answer.marksAwarded = answer.isCorrect ? test.config.marksPerQuestion : (test.config.negativeMarking ? test.config.negativeMarks : 0);
+      if (question) {
+        const serializedQuestion = serializeQuestionDocForClient(question, 'en');
+        const evaluation = evaluateQuestionAttempt(serializedQuestion, answer, test.config);
+        answer.isCorrect = evaluation.isCorrect;
+        answer.marksAwarded = evaluation.marksAwarded;
+        answer.evaluationStatus = evaluation.evaluationStatus;
+        answer.evaluationReason = evaluation.evaluationReason;
       }
     });
 
@@ -200,7 +216,8 @@ exports.submitTest = async (req, res) => {
     const groupedEnrollments = new Map();
 
     (attempt.answers || []).forEach((answer) => {
-      if (!answer?.selectedOption) return;
+      const attempted = Boolean(answer?.selectedOption) || answerPayloadHasValue(answer?.answerPayload);
+      if (!attempted) return;
       const q = questionsById.get(String(answer.questionId));
       const canonicalQuestionId = String(q?.questionId || '').trim();
       if (!canonicalQuestionId) return;
@@ -240,13 +257,13 @@ exports.submitTest = async (req, res) => {
     const attemptObject = attempt.toObject ? attempt.toObject() : attempt;
     const language = getPreferredLanguage(req);
     if (attemptObject?.testId?.questions) {
-      attemptObject.testId.questions = mapQuestionDocsForLanguage(attemptObject.testId.questions, language);
+      attemptObject.testId.questions = attemptObject.testId.questions.map((question) => serializeQuestionDocForClient(question, language));
     }
     if (Array.isArray(attemptObject?.answers)) {
       attemptObject.answers = attemptObject.answers.map((answer) => ({
         ...answer,
         questionId: answer?.questionId && typeof answer.questionId === 'object'
-          ? mapQuestionDocsForLanguage([answer.questionId], language)[0]
+          ? serializeQuestionDocForClient(answer.questionId, language)
           : answer.questionId,
       }));
     }
@@ -274,13 +291,13 @@ exports.getAttempt = async (req, res) => {
     const attemptObject = attempt.toObject ? attempt.toObject() : attempt;
     const language = getPreferredLanguage(req);
     if (attemptObject?.testId?.questions) {
-      attemptObject.testId.questions = mapQuestionDocsForLanguage(attemptObject.testId.questions, language);
+      attemptObject.testId.questions = attemptObject.testId.questions.map((question) => serializeQuestionDocForClient(question, language));
     }
     if (Array.isArray(attemptObject?.answers)) {
       attemptObject.answers = attemptObject.answers.map((answer) => ({
         ...answer,
         questionId: answer?.questionId && typeof answer.questionId === 'object'
-          ? mapQuestionDocsForLanguage([answer.questionId], language)[0]
+          ? serializeQuestionDocForClient(answer.questionId, language)
           : answer.questionId,
       }));
     }
@@ -368,26 +385,35 @@ exports.createCustomTest = async (req, res) => {
 
     // Ensure sampled imported questions exist in Question collection for Test/TestAttempt flow
     const ensuredQuestions = await Promise.all(importedQuestions.map(async (iq) => {
-      const options = ['A', 'B', 'C', 'D'].map((key) => ({
-        key,
-        text: {
-          en: iq?.options?.[key] || '',
-          ...(iq?.optionsHi?.[key] ? { hi: iq.optionsHi[key] } : {}),
-        },
-        isCorrect: iq?.correct_option === key,
-      }));
+      const mappedType = normalizeQuestionType(iq?.type);
+      const built = buildTypeDataFromImported(iq);
+      const options = ['A', 'B', 'C', 'D']
+        .map((key) => {
+          const english = iq?.options?.[key] || '';
+          const hindi = iq?.optionsHi?.[key] || '';
+          if (!english && !hindi) return null;
+          return {
+            key,
+            text: {
+              en: english,
+              ...(hindi ? { hi: hindi } : {}),
+            },
+            isCorrect: iq?.correct_option === key,
+          };
+        })
+        .filter(Boolean);
 
       const doc = await Question.findOneAndUpdate(
         { questionId: String(iq.questionId) },
         {
-          $setOnInsert: {
+          $set: {
             questionId: String(iq.questionId),
             question: {
               en: String(iq.question || '').trim() || 'Question text unavailable',
               ...(iq?.questionHi ? { hi: String(iq.questionHi).trim() } : {}),
             },
             options,
-            correctAnswer: iq?.correct_option || null,
+            correctAnswer: iq?.correct_option || iq?.correct_answer || null,
             explanation: {
               en: String(iq.explanation || '').trim() || 'No explanation available.',
               ...(iq?.explanationHi ? { hi: String(iq.explanationHi).trim() } : {}),
@@ -403,9 +429,17 @@ exports.createCustomTest = async (req, res) => {
               exam: iq.pyqExam || undefined,
               shift: iq.pyqShift || undefined,
             },
+            imageUrl: iq?.imageUrl || null,
+            imageId: iq?.imageId || null,
+            questionType: mappedType,
+            typeData: {
+              ...(built.typeData || {}),
+              explanationImageUrl: iq?.explanationImageUrl || null,
+            },
+            isSupported: built.isSupported,
+            unsupportedReason: built.unsupportedReason,
             isActive: true,
-            questionType: 'mcq',
-          }
+          },
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );

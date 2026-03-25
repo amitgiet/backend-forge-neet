@@ -534,7 +534,7 @@ class AITools {
         .lean();
 
         if (run) {
-            const questions = await this.getImportedQuestionsByUIDs(run.uids);
+            const questions = await this.getImportedQuestionsByUIDs(run.uids, run.subject);
             const wrongQuestions = [];
             const wrongUids = [];
 
@@ -593,10 +593,16 @@ class AITools {
         };
     }
 
-    static async getImportedQuestionsByUIDs(uids = []) {
+    static async getImportedQuestionsByUIDs(uids = [], subject = null) {
         const uidList = Array.isArray(uids) ? uids.map((u) => String(u)).filter(Boolean) : [];
         if (uidList.length === 0) return [];
-        const questionDocs = await ImportedQuestion.find({ questionId: { $in: uidList } }).lean();
+        
+        const query = { questionId: { $in: uidList }, isActive: true };
+        if (subject) {
+            query.subject = subject.toLowerCase();
+        }
+        
+        const questionDocs = await ImportedQuestion.find(query).lean();
         const questionMap = {};
         questionDocs.forEach((q) => {
             questionMap[String(q.questionId)] = q;

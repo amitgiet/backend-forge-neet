@@ -6,7 +6,13 @@ const ImportedQuestionSchema = new mongoose.Schema(
         questionId: {
             type: String,
             required: true,
-            unique: true,
+            index: true,
+        },
+
+        language: {
+            type: String,
+            enum: ['en', 'hi'],
+            default: 'en',
             index: true,
         },
 
@@ -66,6 +72,7 @@ const ImportedQuestionSchema = new mongoose.Schema(
         // Question type: "mcq" etc.
         type: {
             type: String,
+            enum: ['mcq', 'fillup', 'match', 'order', 'flashcard', 'video', 'fill-blank', 'diagram-label', 'numeric', 'notes', 'image'],
             default: 'mcq',
         },
 
@@ -164,8 +171,34 @@ const ImportedQuestionSchema = new mongoose.Schema(
             default: null,
         },
 
+        // Optional explanation image URL
+        explanationImageUrl: {
+            type: String,
+            default: null,
+        },
+
         // Source image identifier from the imported question dataset
         imageId: {
+            type: String,
+            default: null,
+        },
+
+        typeData: {
+            type: mongoose.Schema.Types.Mixed,
+            default: null,
+        },
+
+        isSupported: {
+            type: Boolean,
+            default: true,
+        },
+
+        unsupportedReason: {
+            type: String,
+            default: null,
+        },
+
+        videoUrl: {
             type: String,
             default: null,
         },
@@ -201,8 +234,8 @@ ImportedQuestionSchema.index({ subject: 1, chapterId: 1, difficulty: 1 });
 ImportedQuestionSchema.index({ chapterId: 1, subTopic: 1 });
 ImportedQuestionSchema.index({ isPYQ: 1, pyqYear: -1 });
 ImportedQuestionSchema.index({ isPYQ: 1, subject: 1, pyqYear: -1 });
-ImportedQuestionSchema.index({ isActive: 1, subject: 1 });
 ImportedQuestionSchema.index({ tags: 1 });
+ImportedQuestionSchema.index({ subject: 1, questionId: 1, language: 1 }, { unique: true });
 
 // ─── Static Helpers ───────────────────────────────────────────────────
 
@@ -210,14 +243,36 @@ ImportedQuestionSchema.index({ tags: 1 });
  * Fetch questions by an array of numeric UIDs (preserves order).
  * Used by curriculumController and custom test generator.
  */
-ImportedQuestionSchema.statics.getByUIDs = async function (uids = []) {
-    const uidList = uids.map((u) => String(u)).filter(Boolean);
+ImportedQuestionSchema.statics.getByUIDs = async function (uids = [], subject = null) {
+    const uidList = Array.isArray(uids) ? uids.map((u) => String(u)).filter(Boolean) : [];
     if (uidList.length === 0) return [];
-    const docs = await this.find({ questionId: { $in: uidList }, isActive: true }).lean();
+
+    const query = { questionId: { $in: uidList }, isActive: true };
+    if (subject) {
+        query.subject = String(subject).toLowerCase();
+    }
+
+    const docs = await this.find(query).lean();
+
+    // Key by "subject|questionId" to avoid collisions when the same questionId
+    // exists across multiple subjects (unique index is subject+questionId+language).
+    const normalizedSubject = subject ? String(subject).toLowerCase() : null;
     const map = {};
-    docs.forEach((d) => { map[d.questionId] = d; });
+    docs.forEach((d) => {
+        const subKey = String(d.subject || '').toLowerCase();
+        const mapKey = normalizedSubject ? String(d.questionId) : `${subKey}|${String(d.questionId)}`;
+        map[mapKey] = d;
+    });
+
     // Return in the same order as input uids
-    return uidList.map((uid) => map[uid]).filter(Boolean);
+    return uidList
+        .map((uid) => {
+            if (normalizedSubject) return map[uid];
+            // Without subject filter, find first match across any subject
+            const matchKey = Object.keys(map).find((k) => k.endsWith(`|${uid}`));
+            return matchKey ? map[matchKey] : undefined;
+        })
+        .filter(Boolean);
 };
 
 /**
