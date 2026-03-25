@@ -198,6 +198,7 @@ app.use(`/api/${API_VERSION}/formulas`, require('./src/routes/formulaRoutes'));
 app.use(`/api/${API_VERSION}/test-series`, require('./src/routes/testSeriesRoutes'));
 app.use(`/api/${API_VERSION}/activities`, require('./src/routes/userActivityRoutes'));
 app.use(`/api/${API_VERSION}/billing`, require('./src/routes/billingRoutes'));
+app.use(`/api/${API_VERSION}/marketing`, require('./src/routes/marketingRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

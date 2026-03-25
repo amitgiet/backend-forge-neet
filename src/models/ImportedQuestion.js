@@ -164,6 +164,12 @@ const ImportedQuestionSchema = new mongoose.Schema(
             default: null,
         },
 
+        // Source image identifier from the imported question dataset
+        imageId: {
+            type: String,
+            default: null,
+        },
+
         // Admin / content QA flags
         isVerified: {
             type: Boolean,
