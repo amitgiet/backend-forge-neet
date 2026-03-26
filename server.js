@@ -191,6 +191,7 @@ app.use(`/api/${API_VERSION}/ai-chat`, require('./src/routes/aiChatRoutes'));
 app.use(`/api/${API_VERSION}/quick-quiz`, require('./src/routes/quickQuizRoutes'));
 app.use(`/api/${API_VERSION}/pyq-marked-ncert`, require('./src/routes/pyqMarkedNCERTRoutes'));
 app.use(`/api/${API_VERSION}/curriculum`, require('./src/routes/curriculumRoutes'));
+app.use(`/api/${API_VERSION}/chapter-resources`, require('./src/routes/chapterResourceRoutes'));
 app.use(`/api/${API_VERSION}/analytics`, require('./src/routes/analyticsRoutes'));
 app.use(`/api/${API_VERSION}/doubts`, require('./src/routes/doubtRoutes'));
 app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionFilterRoutes'));
