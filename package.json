@@ -31,7 +31,12 @@
         "feed:bio12:english": "node scripts/feedClass12BiologyEnglishUrls.js",
         "test": "jest --watchAll --verbose",
         "formula:hindi:test": "node scripts/generateHindiFormulaCardImages.js",
-        "formula:hindi:apply": "node scripts/generateHindiFormulaCardImages.js --apply"
+        "formula:hindi:apply": "node scripts/generateHindiFormulaCardImages.js --apply",
+        "podcast:tts:process": "node scripts/podcastTranscribeAndRegenerate.js",
+        "podcast:tts:update": "node scripts/podcastTranscribeAndRegenerate.js --update",
+        "podcast:tts:bio": "node scripts/podcastTranscribeAndRegenerate.js --subject=biology",
+        "podcast:tts:chem": "node scripts/podcastTranscribeAndRegenerate.js --subject=chemistry",
+        "podcast:tts:phy": "node scripts/podcastTranscribeAndRegenerate.js --subject=physics"
     },
     "keywords": [
         "neet",

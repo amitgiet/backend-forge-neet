@@ -34,6 +34,13 @@ const ContentItemSchema = new mongoose.Schema(
         answer:   { type: String, default: null },
         driveLink: { type: String, default: null },
         driveId:   { type: String, default: null },
+        // ── Dual-language TTS audio (podcasts) ──────────────────────────────
+        // English (Gemini TTS re-generated audio)
+        englishDriveLink: { type: String, default: null },
+        englishDriveId:   { type: String, default: null },
+        // Hindi (Gemini TTS translated + converted audio)
+        hindiDriveLink:   { type: String, default: null },
+        hindiDriveId:     { type: String, default: null },
         // For items with multiple files (like memes)
         files:     { type: [PageFileSchema], default: [] },
     },
@@ -51,7 +58,6 @@ const ChapterResourceSchema = new mongoose.Schema(
             type: String,
             required: true,
             enum: ['biology', 'chemistry', 'physics'],
-            index: true,
         },
 
         // Display name extracted from topicName (before first ">>")
