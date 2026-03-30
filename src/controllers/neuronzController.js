@@ -1,5 +1,9 @@
 const NeuronzService = require('../services/neuronzService');
 const ErrorResponse = require('../utils/errorResponse');
+const {
+    getPreferredLanguage,
+    mapImportedQuestionsForLanguage,
+} = require('../utils/languagePreference');
 
 // @desc    Get due questions grouped by level (L1–L7)
 // @route   GET /api/neuronz/due
@@ -19,12 +23,16 @@ exports.getDueQuestions = async (req, res, next) => {
 exports.getLevelQuestions = async (req, res, next) => {
     try {
         const { level } = req.params;
-        const { limit = 50 } = req.query;
         const levelNum = parseInt(level, 10);
         if (isNaN(levelNum) || levelNum < 1 || levelNum > 7) {
             return next(new ErrorResponse('Level must be between 1 and 7', 400));
         }
-        const data = await NeuronzService.getLevelQuestions(req.user.id, levelNum, parseInt(limit, 10));
+        const rawLimit = req.query.limit;
+        const parsedLimit = Number.parseInt(String(rawLimit ?? ''), 10);
+        const limitValue = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : null;
+        const data = await NeuronzService.getLevelQuestions(req.user.id, levelNum, limitValue);
+        const language = getPreferredLanguage(req);
+        data.questions = mapImportedQuestionsForLanguage(data.questions, language);
         res.status(200).json({ success: true, data });
     } catch (error) {
         next(new ErrorResponse(error.message, 500));

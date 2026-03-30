@@ -109,20 +109,26 @@ class NeuronzService {
      * Get full question documents for a specific level (for the quiz player).
      * Returns questions that are due (nextRevision <= now) for this level.
      */
-    static async getLevelQuestions(userId, level, limit = 50) {
+    static async getLevelQuestions(userId, level, limit = null) {
         await this.backfillFromCurriculumAttemptsIfEmpty(userId);
 
         const endOfToday = new Date();
         endOfToday.setHours(23, 59, 59, 999);
 
-        const userQuestions = await UserQuestion.find({
+        let query = UserQuestion.find({
             userId: new mongoose.Types.ObjectId(userId),
             level: Number(level),
             $or: [
                 { nextRevision: { $lte: endOfToday } },
                 { level: 1, totalAttempts: 0 }
             ]
-        }).sort({ nextRevision: 1 }).limit(limit).lean();
+        }).sort({ nextRevision: 1 });
+
+        if (Number.isFinite(limit) && Number(limit) > 0) {
+            query = query.limit(Number(limit));
+        }
+
+        const userQuestions = await query.lean();
 
         if (userQuestions.length === 0) return { questions: [], userQuestions: [] };
 
