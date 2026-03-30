@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 
 const UserQuestionSchema = new mongoose.Schema({
     userId: {
@@ -85,8 +85,8 @@ UserQuestionSchema.methods.getNextRevisionDate = function (level, lastReviewed =
 };
 
 // Update question level after a NeuronZ review attempt
-// Correct   → advance one level (max L7)
-// Incorrect → STAY at same level (no drop, per NeuronZ spec)
+// Correct   â†’ advance one level (max L7)
+// Incorrect â†’ STAY at same level (no drop, per NeuronZ spec)
 UserQuestionSchema.methods.updateLevel = function (wasCorrect, timeSpent = 0) {
     this.totalAttempts += 1;
 
@@ -96,7 +96,7 @@ UserQuestionSchema.methods.updateLevel = function (wasCorrect, timeSpent = 0) {
         this.level = Math.min(7, this.level + 1);
     } else {
         this.streak = 0;
-        // Stay at same level — no drop
+        // Stay at same level â€” no drop
         this.level = Math.max(1, this.level);
     }
 
@@ -157,13 +157,13 @@ UserQuestionSchema.statics.createOrUpdate = async function (userId, questionId, 
 
 /**
  * Bulk-enroll answered question UIDs into NeuronZ at Level 1.
- * Only creates new records — does NOT overwrite existing progress.
+ * Only creates new records â€” does NOT overwrite existing progress.
  * nextRevision = now + 24h so questions appear after 24 hours (not immediately).
  */
 UserQuestionSchema.statics.bulkEnroll = async function (userId, uids = [], sourceInfo = {}) {
     if (!uids || uids.length === 0) return { enrolled: 0 };
 
-    const userObjectId = new require('mongoose').Types.ObjectId(userId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
     const nextRevision = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24h
 
     const ops = uids.map((uid) => ({
@@ -193,7 +193,7 @@ UserQuestionSchema.statics.bulkEnroll = async function (userId, uids = [], sourc
         }
     }));
 
-    const result = await require('mongoose').model('UserQuestion').bulkWrite(ops, { ordered: false });
+    const result = await mongoose.model('UserQuestion').bulkWrite(ops, { ordered: false });
     return { enrolled: result.upsertedCount || 0, existing: result.matchedCount || 0 };
 };
 

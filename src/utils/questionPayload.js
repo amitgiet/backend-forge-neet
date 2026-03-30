@@ -46,6 +46,57 @@ const buildUnsupported = (type, reason) => ({
     unsupportedReason: reason || `${type} data is not available yet`,
 });
 
+const splitMatchPair = (value) => {
+    const text = pickLocalizedValue(value);
+    if (!hasText(text)) return null;
+
+    const normalized = String(text).replace(/\r?\n/g, '\n').trim();
+    const separators = [',', '|', ':', ' - ', '\t'];
+
+    for (const separator of separators) {
+        const index = normalized.indexOf(separator);
+        if (index === -1) continue;
+
+        const left = normalized.slice(0, index).trim();
+        const right = normalized.slice(index + separator.length).trim();
+        if (hasText(left) && hasText(right)) {
+            return { left, right };
+        }
+    }
+
+    const lines = normalized.split('\n').map((part) => part.trim()).filter(Boolean);
+    if (lines.length >= 2) {
+        return {
+            left: lines[0],
+            right: lines.slice(1).join(' '),
+        };
+    }
+
+    return null;
+};
+
+const buildLegacyMatchPairs = (question = {}) => {
+    const optionKeys = ['A', 'B', 'C', 'D'];
+    return optionKeys
+        .map((key, index) => {
+            const parsed = splitMatchPair(question?.options?.[key]);
+            if (!parsed) return null;
+            return {
+                id: key || String(index),
+                left: parsed.left,
+                right: parsed.right,
+            };
+        })
+        .filter(Boolean);
+};
+
+const normalizeMatchPair = (pair = {}, index = 0, language = 'en') => ({
+    id: pair?.id || String.fromCharCode(65 + index),
+    left: pickLocalizedValue(pair?.left, language) || '',
+    right: pickLocalizedValue(pair?.right, language) || '',
+});
+
+
 const buildTypeDataFromImported = (question = {}) => {
     const type = normalizeQuestionType(question.type);
     const optionMap = ['A', 'B', 'C', 'D'].reduce((acc, key) => {
@@ -105,9 +156,14 @@ const buildTypeDataFromImported = (question = {}) => {
     }
 
     if (type === 'match') {
-        if (Array.isArray(question?.typeData?.pairs) && question.typeData.pairs.length > 0) {
+        const storedPairs = Array.isArray(question?.typeData?.pairs)
+            ? question.typeData.pairs.map((pair, index) => normalizeMatchPair(pair, index))
+            : [];
+        const fallbackPairs = storedPairs.length > 0 ? storedPairs : buildLegacyMatchPairs(question);
+
+        if (fallbackPairs.length > 0) {
             return {
-                typeData: { pairs: question.typeData.pairs },
+                typeData: { pairs: fallbackPairs },
                 isSupported: true,
                 unsupportedReason: null,
             };
@@ -172,13 +228,11 @@ const buildTypeDataFromQuestionDoc = (question = {}, language = 'en') => {
     }
 
     if (type === 'match') {
-        const pairs = Array.isArray(typeData.pairs)
-            ? typeData.pairs.map((pair) => ({
-                left: pickLocalizedValue(pair?.left, language) || '',
-                right: pickLocalizedValue(pair?.right, language) || '',
-                id: pair?.id || null,
-            }))
+        const storedPairs = Array.isArray(typeData.pairs)
+            ? typeData.pairs.map((pair, index) => normalizeMatchPair(pair, index, language))
             : [];
+        const legacyPairs = storedPairs.length > 0 ? storedPairs : buildLegacyMatchPairs(question);
+        const pairs = legacyPairs.filter((pair) => hasText(pair.left) && hasText(pair.right));
         return {
             typeData: { pairs },
             isSupported: pairs.length > 0,

@@ -2,18 +2,12 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
-const FormulaCard = require('../src/models/FormulaCard');
+const ChapterResource = require('../src/models/ChapterResource');
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_CONCURRENCY = 15;
-const DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
-const DEFAULT_PROMPT = [
-  'Translate the educational content in this formula card from English to Hindi.',
-  'Keep mathematical formulas, equations, symbols, units, molecular formulas',
-  'Replace only the natural-language labels, headings, and explanations with clear student-friendly Hindi.',
-  'Preserve the original layout, colors, spacing, and visual structure as closely as possible.',
-  'Do not remove content, crop the image, or add extra branding.'
-].join(' ');
+const DEFAULT_CONCURRENCY = 5;
+const DEFAULT_MODEL = 'gemini-2.5-flash-image';
+const DEFAULT_PROMPT = "You are an assistant that enhances educational notes page images to make them clearer and more visually appealing, while preserving the original content exactly. Improve clarity, sharpness, contrast, and readability of text and diagrams. Remove compression artifacts and visual noise. Carefully identify and remove a specific background structure describe as : A semi-transparent cloudy or brain type structure is placed in the center of the image, featuring the text “memoneet Line by Line NCERT” in a light purple, handwritten-style font. Behind the text, there is a faint brain illustration in soft pastel shades (yellow and purple), giving it an educational and memory-based theme, replace it with a clean, uniform neutral background. Preserve only the foreground educational material including headings, subheadings, definitions, and diagrams exactly as they appear. Do not change wording, labels, formulas, diagrams, layouts, or meanings. The goal is to produce a cleaner, higher-quality version of the same study page.";
 
 const CONTENT_TYPE_TO_EXT = {
   'image/jpeg': 'jpg',
@@ -43,9 +37,10 @@ const parseArgs = () => {
     limit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0,
     concurrency: Number.isFinite(concurrency) && concurrency > 0 ? Math.floor(concurrency) : DEFAULT_CONCURRENCY,
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : DEFAULT_TIMEOUT_MS,
-    subject: String(getValue('--subject', '') || '').trim(),
+    subject: String(getValue('--subject', 'biology') || 'biology').trim().toLowerCase(),
     chapter: String(getValue('--chapter', '') || '').trim(),
-    topic: String(getValue('--topic', '') || '').trim(),
+    slug: String(getValue('--slug', '') || '').trim(),
+    pageId: String(getValue('--page-id', '') || '').trim(),
     prompt: String(getValue('--prompt', DEFAULT_PROMPT) || DEFAULT_PROMPT).trim(),
     model: String(getValue('--model', DEFAULT_MODEL) || DEFAULT_MODEL).trim()
   };
@@ -71,11 +66,6 @@ const ensureLogDir = () => {
   return dir;
 };
 
-const isGoogleDriveUrl = (urlValue) => {
-  const url = String(urlValue || '').toLowerCase();
-  return url.includes('drive.google.com') || url.includes('googleusercontent.com');
-};
-
 const extractDriveFileId = (urlValue = '') => {
   const url = String(urlValue || '').trim();
   if (!url) return null;
@@ -90,61 +80,64 @@ const extractDriveFileId = (urlValue = '') => {
 };
 
 const ensureAccessToken = async () => {
+  const direct = String(process.env.GOOGLE_DRIVE_ACCESS_TOKEN || process.env.AC || '').trim();
+  if (direct) return direct;
+
   const refreshToken = String(process.env.GOOGLE_DRIVE_REFRESH_TOKEN || '').trim();
   const clientId = String(process.env.GOOGLE_DRIVE_CLIENT_ID || '').trim();
   const clientSecret = String(process.env.GOOGLE_DRIVE_CLIENT_SECRET || '').trim();
 
-  // Always prefer getting a fresh token to avoid 401 errors mid-run
-  if (refreshToken && clientId && clientSecret) {
-    try {
-      const payload = new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token'
-      });
-
-      const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: payload
-      });
-
-      const data = await response.json();
-      if (response.ok && data.access_token) {
-        return data.access_token;
-      }
-    } catch (e) {
-      console.warn('Refresh failed, falling back to AC:', e.message);
-    }
+  if (!refreshToken || !clientId || !clientSecret) {
+    throw new Error(
+      'Missing Google auth env. Provide GOOGLE_DRIVE_ACCESS_TOKEN, or GOOGLE_DRIVE_REFRESH_TOKEN + GOOGLE_DRIVE_CLIENT_ID + GOOGLE_DRIVE_CLIENT_SECRET'
+    );
   }
 
-  const direct = String(process.env.GOOGLE_DRIVE_ACCESS_TOKEN || process.env.AC || '').trim();
-  if (direct) return direct;
+  const payload = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+    grant_type: 'refresh_token'
+  });
 
-  throw new Error(
-    'Missing Google auth env. Provide GOOGLE_DRIVE_REFRESH_TOKEN + GOOGLE_DRIVE_CLIENT_ID + GOOGLE_DRIVE_CLIENT_SECRET'
-  );
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: payload
+  });
+
+  const data = await response.json();
+  if (!response.ok || !data.access_token) {
+    throw new Error(`Failed to refresh Google token: ${JSON.stringify(data)}`);
+  }
+
+  return data.access_token;
 };
 
-const downloadImage = async (url, timeoutMs) => {
+const downloadImage = async ({ url, accessToken, timeoutMs }) => {
+  const fileId = extractDriveFileId(url);
+  const finalUrl = fileId
+    ? `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
+    : url;
+
+  const headers = { 'User-Agent': 'NEETForge-Notes-Enhancer/1.0' };
+  if (fileId && accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+  }
+
   const response = await withTimeout(
-    fetch(url, {
-      headers: {
-        'User-Agent': 'NEETForge-Formula-Enhancer/1.0'
-      },
-      redirect: 'follow'
-    }),
+    fetch(finalUrl, { headers, redirect: 'follow' }),
     timeoutMs,
-    `Timed out while downloading source image: ${url}`
+    `Timed out while downloading source image: ${finalUrl}`
   );
 
   if (!response.ok) {
-    throw new Error(`Download failed (${response.status})`);
+    throw new Error(`Download failed (${response.status}) for ${finalUrl}`);
   }
 
-  const contentType = String(response.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
+  const contentType = String(response.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim().toLowerCase();
   const buffer = Buffer.from(await response.arrayBuffer());
+
   if (!buffer.length) {
     throw new Error('Downloaded empty file');
   }
@@ -269,13 +262,10 @@ const generateImprovedImageWithGemini = async ({
 
   if (!inline?.data) {
     const textPart = candidateParts.find((part) => typeof part?.text === 'string');
-    if (textPart?.text) {
-         throw new Error(`Gemini returned TEXT instead of an image: ${textPart.text}`);
-    }
-    throw new Error(`Gemini returned no image data and no text.`);
+    throw new Error(`Gemini returned no image data${textPart?.text ? `: ${textPart.text}` : ''}`);
   }
 
-  const outMime = String(inline.mimeType || inline.mime_type || 'image/png').trim();
+  const outMime = String(inline.mimeType || inline.mime_type || 'image/png').trim().toLowerCase();
   return {
     buffer: Buffer.from(inline.data, 'base64'),
     contentType: outMime
@@ -300,32 +290,14 @@ const runWithConcurrency = async (items, concurrency, worker) => {
 };
 
 const run = async () => {
-  const {
-    dryRun,
-    force,
-    apply,
-    retryFile,
-    limit,
-    concurrency,
-    timeoutMs,
-    subject,
-    chapter,
-    topic,
-    prompt,
-    model
-  } = parseArgs();
+  const args = parseArgs();
+  const { dryRun, force, apply, retryFile, limit, concurrency, timeoutMs, subject, chapter, slug, pageId, prompt, model } = args;
 
-  if (!process.env.MONGODB_URI) {
-    throw new Error('MONGODB_URI is missing');
-  }
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is required');
-  }
+  if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is missing');
+  if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is required');
 
-  const folderId = String(process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
-  if (!folderId) {
-    throw new Error('GOOGLE_DRIVE_FOLDER_ID is required');
-  }
+  const folderId = String(process.env.GOOGLE_DRIVE_IMAGES_FOLDER_ID || '').trim();
+  if (!folderId) throw new Error('GOOGLE_DRIVE_IMAGES_FOLDER_ID is required');
 
   const accessToken = await ensureAccessToken();
 
@@ -333,58 +305,76 @@ const run = async () => {
   console.log(`Connected to MongoDB. dryRun=${dryRun}, force=${force}, concurrency=${concurrency}, limit=${limit || 'all'}`);
 
   const query = {
-    imgUrl: { $exists: true, $ne: '' }
+    'notes.mode': 'image_pages',
+    'notes.pageFiles.0': { $exists: true }
   };
-  if (subject) query.subjectTitle = subject;
-  if (chapter) query.chapterTitle = chapter;
-  if (topic) query.topicTitle = topic;
+  if (subject) query.subject = subject;
+  if (chapter) query.chapterName = chapter;
+  if (slug) query.slug = slug;
 
-  const cards = await FormulaCard.find(query).sort({ _id: 1 }).lean();
+  const docs = await ChapterResource.find(query).sort({ chapterName: 1, _id: 1 }).lean();
 
-  let filterIds = null;
+  let retryKeys = new Set();
   if (retryFile) {
-    if (!fs.existsSync(retryFile)) {
-      throw new Error(`Retry file not found: ${retryFile}`);
-    }
+    if (!fs.existsSync(retryFile)) throw new Error(`Retry file not found: ${retryFile}`);
     const content = fs.readFileSync(retryFile, 'utf8');
-    filterIds = content.split('\n').filter(Boolean).map(line => {
+    content.split('\n').filter(Boolean).forEach(line => {
       try {
         const parsed = JSON.parse(line);
-        return parsed.cardId;
-      } catch (e) {
-        return null;
-      }
-    }).filter(Boolean);
-    console.log(`Found ${filterIds.length} valid card IDs in retry file.`);
+        retryKeys.add(`${parsed.chapterResourceId}::${parsed.pageId}`);
+      } catch (e) { }
+    });
+    console.log(`Found ${retryKeys.size} retry keys.`);
   }
 
-  const selected = cards.filter((card) => {
-    if (filterIds) {
-      return filterIds.includes(String(card._id));
+  const fullQueue = [];
+  for (const doc of docs) {
+    const pageFiles = doc.notes?.pageFiles || [];
+    for (const page of pageFiles) {
+      const key = `${doc._id}::${page.pageId}`;
+      if (retryKeys.size > 0 && !retryKeys.has(key)) continue;
+      if (pageId && page.pageId !== pageId) continue;
+
+      const oldUrl = String(page.driveLink || '').trim();
+      if (!oldUrl) continue;
+
+      // Skip already enhanced unless force
+      if (!force && /notes-enhanced/i.test(oldUrl)) continue;
+
+      fullQueue.push({
+        chapterResourceId: String(doc._id),
+        subject: doc.subject,
+        chapterName: doc.chapterName,
+        slug: doc.slug,
+        pageId: page.pageId,
+        oldUrl,
+        oldDriveId: page.driveId || extractDriveFileId(oldUrl)
+      });
     }
-    if (force) return true;
-    return !card.hindiImgUrl || card.hindiImgUrl === '';
-  });
-  const queue = limit > 0 ? selected.slice(0, limit) : selected;
+  }
+
+  const queue = limit > 0 ? fullQueue.slice(0, limit) : fullQueue;
+  console.log(`Queue size: ${queue.length} pages (total pages found: ${fullQueue.length})`);
 
   const logDir = ensureLogDir();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const mapLogPath = path.join(logDir, `formula-image-gemini-map-${stamp}.jsonl`);
-  const errorLogPath = path.join(logDir, `formula-image-gemini-errors-${stamp}.jsonl`);
-  const pendingMongoPath = path.join(logDir, `formula-image-gemini-pending-mongo-${stamp}.json`);
+  const mapLogPath = path.join(logDir, `notes-image-gemini-map-${stamp}.jsonl`);
+  const errorLogPath = path.join(logDir, `notes-image-gemini-errors-${stamp}.jsonl`);
+  const pendingMongoPath = path.join(logDir, `notes-image-gemini-pending-mongo-${stamp}.json`);
 
   let updated = 0;
   let failed = 0;
-  let skipped = cards.length - queue.length;
   let processed = 0;
   const pendingMongoUpdates = [];
 
-  await runWithConcurrency(queue, concurrency, async (card, index) => {
-    const oldUrl = String(card.imgUrl || '').trim();
-    const oldDriveFileId = extractDriveFileId(oldUrl);
-
+  await runWithConcurrency(queue, concurrency, async (item, index) => {
     try {
-      const source = await downloadImage(oldUrl, timeoutMs);
+      const source = await downloadImage({
+        url: item.oldUrl,
+        accessToken,
+        timeoutMs
+      });
+
       const improved = await generateImprovedImageWithGemini({
         apiKey: process.env.GEMINI_API_KEY,
         model,
@@ -396,18 +386,21 @@ const run = async () => {
 
       const ext = CONTENT_TYPE_TO_EXT[improved.contentType] || 'png';
       const fileName = [
-        sanitizeFilePart(card.subjectTitle, 'subject'),
-        sanitizeFilePart(card.chapterTitle, 'chapter'),
-        sanitizeFilePart(card.topicTitle, 'topic'),
-        sanitizeFilePart(card.title, 'card'),
-        `${String(card._id)}-enhanced-${Date.now()}.${ext}`
+        sanitizeFilePart(item.subject, 'subject'),
+        sanitizeFilePart(item.chapterName, 'chapter'),
+        `page-${sanitizeFilePart(item.pageId, 'page')}`,
+        `notes-enhanced-${Date.now()}.${ext}`
       ].join(' - ');
 
       let newDriveFileId = null;
-      let finalUrl = oldUrl;
-      let modeUsed = 'dry-run-upload-new';
+      let finalUrl = item.oldUrl;
+      let modeUsed = 'upload-new-preserve-old';
 
-      if (!dryRun) {
+      if (dryRun) {
+        modeUsed = 'dry-run-no-upload';
+        finalUrl = 'DRY_RUN_PENDING_URL';
+        newDriveFileId = 'DRY_RUN_ID';
+      } else {
         const uploaded = await uploadNewDriveFile({
           fileName,
           buffer: improved.buffer,
@@ -424,93 +417,83 @@ const run = async () => {
 
         newDriveFileId = uploaded.id;
         finalUrl = buildPublicUrl(uploaded.id);
-        modeUsed = oldDriveFileId ? 'drive-upload-new-preserve-old' : 'drive-upload-new-from-non-drive';
+
+        console.log(`[SUCCESS] Page ${item.pageId} Uploaded -> ${finalUrl}`);
 
         pendingMongoUpdates.push({
-          cardId: String(card._id),
-          oldUrl,
+          chapterResourceId: item.chapterResourceId,
+          pageId: item.pageId,
+          oldUrl: item.oldUrl,
           newUrl: finalUrl,
-          oldDriveFileId: oldDriveFileId || null,
-          newDriveFileId
+          oldDriveId: item.oldDriveId,
+          newDriveId: newDriveFileId
         });
       }
 
-      fs.appendFileSync(
-        mapLogPath,
-        `${JSON.stringify({
-          cardId: String(card._id),
-          title: card.title,
-          subjectTitle: card.subjectTitle,
-          chapterTitle: card.chapterTitle,
-          topicTitle: card.topicTitle,
-          oldUrl,
-          oldDriveFileId: oldDriveFileId || null,
-          newDriveFileId,
-          newUrl: finalUrl,
-          uploadedFileName: fileName,
-          mode: modeUsed,
-          originalPreserved: true
-        })}\n`
-      );
+      fs.appendFileSync(mapLogPath, `${JSON.stringify({
+        chapterResourceId: item.chapterResourceId,
+        chapterName: item.chapterName,
+        pageId: item.pageId,
+        oldUrl: item.oldUrl,
+        newUrl: finalUrl,
+        oldDriveId: item.oldDriveId,
+        newDriveId: newDriveFileId,
+        uploadedFileName: fileName,
+        mode: modeUsed
+      })}\n`);
 
       updated += 1;
-      processed += 1;
-      if ((index + 1) % 10 === 0 || index === queue.length - 1) {
-        console.log(`Processed ${index + 1}/${queue.length} ... updated=${updated}, failed=${failed}`);
-      }
     } catch (error) {
       failed += 1;
+      fs.appendFileSync(errorLogPath, `${JSON.stringify({
+        chapterResourceId: item.chapterResourceId,
+        pageId: item.pageId,
+        oldUrl: item.oldUrl,
+        error: error.message
+      })}\n`);
+      console.error(`Failed for ${item.chapterResourceId} page ${item.pageId}: ${error.message}`);
+    } finally {
       processed += 1;
-      fs.appendFileSync(
-        errorLogPath,
-        `${JSON.stringify({
-          cardId: String(card._id),
-          title: card.title,
-          oldUrl,
-          error: error.message
-        })}\n`
-      );
-      console.error(`Failed for card ${card._id}: ${error.message}`);
+      if (processed % 5 === 0 || processed === queue.length) {
+        console.log(`Processed ${processed}/${queue.length} ... updated=${updated}, failed=${failed}`);
+      }
     }
   });
 
-  fs.writeFileSync(
-    pendingMongoPath,
-    JSON.stringify(
-      {
-        createdAt: new Date().toISOString(),
-        dryRun,
-        totalQueued: queue.length,
-        failed,
-        updates: pendingMongoUpdates
-      },
-      null,
-      2
-    )
-  );
+  fs.writeFileSync(pendingMongoPath, JSON.stringify({
+    createdAt: new Date().toISOString(),
+    dryRun,
+    totalQueued: queue.length,
+    processed,
+    updated,
+    failed,
+    updates: pendingMongoUpdates
+  }, null, 2));
 
-  if (!dryRun) {
-    if (apply) {
-      console.log(`\nApplying ${pendingMongoUpdates.length} updates to MongoDB (hindiImgUrl field)...`);
-      for (const update of pendingMongoUpdates) {
-        await FormulaCard.updateOne(
-          { _id: new mongoose.Types.ObjectId(update.cardId) },
-          { $set: { hindiImgUrl: update.newUrl } }
-        );
-      }
-      console.log('MongoDB (hindiImgUrl) updates applied successfully.');
-    } else {
-      console.log(`MongoDB updates were NOT applied. Review and apply using --apply, or manually from ${pendingMongoPath}`);
+  if (!dryRun && apply && pendingMongoUpdates.length > 0) {
+    console.log(`\nApplying ${pendingMongoUpdates.length} updates to MongoDB...`);
+    for (const update of pendingMongoUpdates) {
+      await ChapterResource.updateOne(
+        { _id: update.chapterResourceId, 'notes.pageFiles.pageId': update.pageId },
+        {
+          $set: {
+            'notes.pageFiles.$.driveLink': update.newUrl,
+            'notes.pageFiles.$.driveId': update.newDriveId
+          }
+        }
+      );
     }
+    console.log('MongoDB updates applied successfully.');
+  } else if (!dryRun && !apply) {
+    console.log(`\nMongoDB updates were NOT applied. Review and run with --apply --limit 0 or similar, or use the pending file.`);
   }
 
-  console.log('--- Formula image Gemini update summary ---');
+  console.log('--- Notes image Gemini update summary ---');
   console.log({
-    totalCards: cards.length,
+    totalDocs: docs.length,
     queued: queue.length,
     processed,
     updated,
-    skipped,
     failed,
     dryRun,
     concurrency,
@@ -523,9 +506,7 @@ const run = async () => {
 };
 
 run().catch(async (error) => {
-  console.error('Formula image Gemini update failed:', error.message);
-  try {
-    await mongoose.disconnect();
-  } catch (_) { }
+  console.error('Notes image Gemini update failed:', error.message);
+  try { await mongoose.disconnect(); } catch (_) { }
   process.exit(1);
 });
