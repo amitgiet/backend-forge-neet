@@ -786,11 +786,15 @@ exports.getQuestionsByUIDs = async (req, res) => {
     try {
         const { uids, subject, page = 1, limit = 20 } = req.query;
 
-        if (!uids) {
-            return res.status(400).json({ success: false, error: 'uids query param is required' });
-        }
         if (!subject) {
-            return res.status(400).json({ success: false, error: 'subject query param is required' });
+            return res.status(400).json({
+                success: false,
+                error: 'Subject parameter is required (Physics, Chemistry, Botany, Zoology)'
+            });
+        }
+
+        if (!uids) {
+            return res.status(400).json({ success: false, error: 'Question UIDs array required' });
         }
 
         const uidList = String(uids)

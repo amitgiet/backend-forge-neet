@@ -380,18 +380,28 @@ Make it suitable for JEE/NEET level exam preparation.`;
           ? Math.round(challenge.xpReward * 0.75)
           : Math.round(challenge.xpReward * 0.5);
 
-      // Record completion only if it's a real DB document
-      if (doc) {
-        const alreadyCompleted = doc.completedBy.find(c => c.userId.toString() === userId.toString());
-        if (!alreadyCompleted) {
-          doc.completedBy.push({
-            userId,
-            score,
-            xpEarned,
-            answers: answers
-          });
-          await doc.save();
-        }
+      // Record completion in decoupled DailyChallengeAttempt collection
+      const DailyChallengeAttempt = require('../models/DailyChallengeAttempt');
+      const moment = require('moment-timezone');
+      const dateIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
+
+      if (challengeId) {
+        await DailyChallengeAttempt.findOneAndUpdate(
+          { challengeId, userId },
+          {
+            $setOnInsert: {
+              challengeId,
+              userId,
+              dateIST,
+              score,
+              maxScore: (questions?.length || 10) * 4,
+              accuracy: Math.round((correctCount / (questions?.length || 1)) * 100),
+              timeTakenSeconds: 0,
+              xpEarned
+            }
+          },
+          { upsert: true, new: true }
+        );
       }
 
       console.log(`[DailyChallengeService] Challenge completed: Score=${score}, XP=${xpEarned}`);

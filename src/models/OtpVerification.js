@@ -1,52 +1,38 @@
 const mongoose = require('mongoose');
 
-const OtpVerificationSchema = new mongoose.Schema(
-    {
-        phone: {
-            type: String,
-            required: true,
-            unique: true,
-            index: true
-        },
-        otpHash: {
-            type: String,
-            default: null
-        },
-        expiresAt: {
-            type: Date,
-            default: null
-        },
-        attempts: {
-            type: Number,
-            default: 0
-        },
-        requestCount: {
-            type: Number,
-            default: 0
-        },
-        requestWindowStart: {
-            type: Date,
-            default: null
-        },
-        lastSentAt: {
-            type: Date,
-            default: null
-        },
-        isVerified: {
-            type: Boolean,
-            default: false
-        },
-        verifiedAt: {
-            type: Date,
-            default: null
-        }
+const OtpVerificationSchema = new mongoose.Schema({
+    phone: {
+        type: String,
+        required: true,
+        match: [/^[0-9]{10}$/, 'Must be a valid 10-digit phone number'],
+        index: true
     },
-    {
-        timestamps: true
+    otpHash: {
+        type: String,
+        required: true
+    },
+    attempts: {
+        type: Number,
+        default: 0,
+        max: 3
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    expiresAt: {
+        type: Date,
+        required: true,
+        index: { expires: '5m' }
+    },
+    lastSentAt: {
+        type: Date,
+        default: Date.now
     }
-);
+}, {
+    timestamps: true
+});
 
-// Auto-delete stale OTP records after 24 hours.
-OtpVerificationSchema.index({ updatedAt: 1 }, { expireAfterSeconds: 24 * 60 * 60 });
+OtpVerificationSchema.index({ phone: 1, isVerified: 1 });
 
 module.exports = mongoose.model('OtpVerification', OtpVerificationSchema);

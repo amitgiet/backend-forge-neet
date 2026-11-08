@@ -406,6 +406,131 @@ class NeuronzService {
             console.warn('[NeuronzService] updateUserDailyProgress failed:', err.message);
         }
     }
+
+    /**
+     * Ingests NCERT line reading session items into the NeuronZ queue.
+     */
+    static async processLineSession(userId, lineIds, sessionData = {}) {
+        const rawIds = Array.isArray(lineIds) ? lineIds : (lineIds ? [lineIds] : []);
+        if (rawIds.length === 0) return { enrolled: 0 };
+
+        const bulkOps = rawIds.map(lineId => {
+            const qId = String(lineId).startsWith('line_') ? String(lineId) : `line_${lineId}`;
+            return {
+                updateOne: {
+                    filter: { userId, questionId: qId },
+                    update: {
+                        $setOnInsert: {
+                            userId,
+                            questionId: qId,
+                            level: 1,
+                            nextRevision: new Date(Date.now() + 24 * 3600000), // L1: 24h
+                            source: (typeof sessionData === 'object' && sessionData.source) ? sessionData.source : {}
+                        }
+                    },
+                    upsert: true
+                }
+            };
+        });
+
+        const result = await UserQuestion.bulkWrite(bulkOps, { ordered: false });
+        return { enrolled: result.upsertedCount || 0 };
+    }
+
+    /**
+     * Assembles the high-efficiency "Daily 20 Blitz" session.
+     */
+    static async assembleDaily20Blitz(userId) {
+        const now = new Date();
+
+        // 1. 10 Urgent Decaying Items (Overdue or due now)
+        const urgentItems = await UserQuestion.find({
+            userId,
+            nextRevision: { $lte: now },
+            level: { $lt: 7 }
+        })
+            .sort({ nextRevision: 1 })
+            .limit(10)
+            .populate('questionId')
+            .lean();
+
+        // 2. 6 Reinforcement Items (Levels 2 to 4)
+        const reinforceItems = await UserQuestion.find({
+            userId,
+            level: { $in: [2, 3, 4] },
+            _id: { $nin: urgentItems.map(u => u._id) }
+        })
+            .limit(6)
+            .populate('questionId')
+            .lean();
+
+        // 3. 4 Mastered Items for retention verification (Level 7 due or random)
+        const masteredItems = await UserQuestion.find({
+            userId,
+            level: 7
+        })
+            .sort({ nextRevision: 1 })
+            .limit(4)
+            .populate('questionId')
+            .lean();
+
+        return {
+            totalQuestions: urgentItems.length + reinforceItems.length + masteredItems.length,
+            deck: [...urgentItems, ...reinforceItems, ...masteredItems]
+        };
+    }
+
+    /**
+     * Returns structured stats for the 7-level pyramid dashboard.
+     */
+    static async getDashboardStats(userId) {
+        const intervalLabels = {
+            1: 'After 24 hrs',
+            2: 'After 3 days',
+            3: 'After 5 days',
+            4: 'After 7 days',
+            5: 'After 10 days',
+            6: 'After 15 days',
+            7: 'After 30 days'
+        };
+
+        const endOfToday = new Date();
+        endOfToday.setHours(23, 59, 59, 999);
+
+        const allDocs = await UserQuestion.find({ userId }).lean();
+
+        const levels = [];
+        let totalDue = 0;
+        let masteredCount = 0;
+
+        for (let lvl = 1; lvl <= 7; lvl++) {
+            const atLevel = allDocs.filter(d => d.level === lvl);
+            const dueAtLevel = atLevel.filter(d => {
+                if (d.level === 1 && d.totalAttempts === 0) return true;
+                return d.nextRevision && new Date(d.nextRevision) <= endOfToday;
+            });
+
+            if (lvl === 7) {
+                masteredCount = atLevel.length;
+            }
+            totalDue += dueAtLevel.length;
+
+            levels.push({
+                level: lvl,
+                totalCount: atLevel.length,
+                dueCount: dueAtLevel.length,
+                intervalLabel: intervalLabels[lvl] || `Level ${lvl}`
+            });
+        }
+
+        return {
+            levels,
+            totalDue,
+            masteredCount,
+            totalTracked: allDocs.length
+        };
+    }
 }
 
 module.exports = NeuronzService;
+

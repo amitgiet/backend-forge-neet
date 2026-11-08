@@ -4,6 +4,8 @@ const Token = require('../models/Token');
 const DailyChallenge = require('../models/DailyChallenge');
 const NotificationLog = require('../models/NotificationLog');
 const NotificationService = require('../../services/notificationService');
+const User = require('../models/User');
+const UserQuestion = require('../models/UserQuestion');
 
 class CronService {
     static initialize() {
@@ -13,6 +15,9 @@ class CronService {
         cron.schedule('*/15 * * * *', async () => {
             await this.processLocalTimeNotifications();
         });
+
+        this.initSubscriptionSweeper();
+        this.initNeuronzMorningReminder();
     }
 
     static async processLocalTimeNotifications() {
@@ -108,13 +113,20 @@ class CronService {
         });
         if (logExists) return;
 
+        const dueCount = await UserQuestion.countDocuments({
+            userId: user._id,
+            nextRevision: { $lte: new Date() }
+        });
+        if (dueCount === 0) return;
+
+        const body = `You have ${dueCount} high-yield NEET items due for review today.`;
         const result = await NotificationService.sendEventNotification(
             user._id,
             'neuronz_review_reminder',
-            '🧠 Strengthen your memory!',
-            'You have NCERT questions due for review today.',
+            '🧠 NeuronZ Memory Decay Alert',
+            body,
             null,
-            { date: dateStr }
+            { date: dateStr, dueCount }
         );
 
         if (result.success) {
@@ -123,8 +135,8 @@ class CronService {
                 notificationType: 'neuronz_review_reminder',
                 date: dateStr,
                 timezone: timezone,
-                title: '🧠 Strengthen your memory!',
-                body: 'You have NCERT questions due for review today.'
+                title: '🧠 NeuronZ Memory Decay Alert',
+                body
             });
         }
     }
@@ -157,6 +169,90 @@ class CronService {
             });
         }
     }
+
+    static initSubscriptionSweeper() {
+        return cron.schedule('0 * * * *', async () => {
+            try {
+                const now = new Date();
+                const result = await User.updateMany(
+                    {
+                        'subscription.plan': { $ne: 'free' },
+                        'subscription.currentPeriodEnd': { $lte: now }
+                    },
+                    {
+                        $set: {
+                            'subscription.plan': 'free',
+                            'subscription.status': 'expired'
+                        }
+                    }
+                );
+
+                if (result.modifiedCount > 0) {
+                    console.log(`[Subscription Sweeper] Reverted ${result.modifiedCount} expired accounts to Free plan.`);
+                }
+            } catch (err) {
+                console.error('[Subscription Sweeper Error]', err);
+            }
+        });
+    }
+
+    static async sweepExpiredSubscriptions() {
+        const now = new Date();
+        return User.updateMany(
+            {
+                'subscription.plan': { $ne: 'free' },
+                'subscription.currentPeriodEnd': { $lte: now }
+            },
+            {
+                $set: {
+                    'subscription.plan': 'free',
+                    'subscription.status': 'expired'
+                }
+            }
+        );
+    }
+
+    static initNeuronzMorningReminder() {
+        // 8:00 AM IST: "30 2 * * *" UTC
+        return cron.schedule('30 2 * * *', async () => {
+            await this.sendMorningDecayAlerts();
+        });
+    }
+
+    static async sendMorningDecayAlerts() {
+        try {
+            const now = new Date();
+            const usersWithDue = await UserQuestion.aggregate([
+                { $match: { nextRevision: { $lte: now } } },
+                { $group: { _id: '$userId', dueCount: { $sum: 1 } } },
+                { $match: { dueCount: { $gt: 0 } } }
+            ]);
+
+            for (const item of usersWithDue) {
+                await NotificationService.sendEventNotification(
+                    item._id,
+                    'neuronz_review_reminder',
+                    '🧠 NeuronZ Memory Decay Alert',
+                    `You have ${item.dueCount} high-yield NEET items due for review today.`,
+                    null,
+                    { dueCount: item.dueCount }
+                );
+            }
+        } catch (err) {
+            console.error('[NeuronZ Cron Error]', err);
+        }
+    }
 }
 
+CronService.initSubscriptionSweeper = CronService.initSubscriptionSweeper;
+CronService.sweepExpiredSubscriptions = CronService.sweepExpiredSubscriptions;
+CronService.initNeuronzMorningReminder = CronService.initNeuronzMorningReminder;
+CronService.sendMorningDecayAlerts = CronService.sendMorningDecayAlerts;
+
 module.exports = CronService;
+module.exports.initSubscriptionSweeper = CronService.initSubscriptionSweeper;
+module.exports.sweepExpiredSubscriptions = CronService.sweepExpiredSubscriptions;
+module.exports.initNeuronzMorningReminder = CronService.initNeuronzMorningReminder;
+module.exports.sendMorningDecayAlerts = CronService.sendMorningDecayAlerts;
+
+

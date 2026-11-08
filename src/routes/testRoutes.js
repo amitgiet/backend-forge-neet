@@ -6,6 +6,7 @@ const {
   getTestById,
   startTest,
   saveAnswer,
+  syncBatchAnswers,
   submitTest,
   getAttempt,
   getUserAttempts,
@@ -19,6 +20,7 @@ router.get('/my-attempts', getUserAttempts);
 router.get('/:testId', getTestById);
 router.post('/:testId/start', startTest);
 router.post('/attempts/:attemptId/answer', saveAnswer);
+router.post('/attempts/:attemptId/sync-batch', syncBatchAnswers);
 router.post('/attempts/:attemptId/submit', submitTest);
 router.get('/attempts/:attemptId', getAttempt);
 router.post('/custom', createCustomTest);

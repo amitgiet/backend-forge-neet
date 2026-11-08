@@ -1,9 +1,10 @@
+const axios = require('axios');
 const FormulaSubject = require('../models/FormulaSubject');
 const FormulaTopic = require('../models/FormulaTopic');
 const FormulaCard = require('../models/FormulaCard');
 const FormulaProgress = require('../models/FormulaProgress');
+const sm2Service = require('../services/sm2Service');
 const ErrorResponse = require('../utils/errorResponse');
-const https = require('https');
 const {
     getPreferredLanguage,
     pickFormulaImageForLanguage,
@@ -33,21 +34,7 @@ const normalizeFormulaImageUrl = (urlValue = '') => {
     const fileId = extractDriveFileId(raw);
     if (!fileId) return raw;
 
-    // More reliable direct image endpoint for <img> tags.
     return `https://lh3.googleusercontent.com/d/${fileId}`;
-};
-
-const ALLOWED_IMAGE_HOSTS = new Set([
-    'drive.google.com',
-    'lh3.googleusercontent.com',
-    'googleusercontent.com'
-]);
-
-const isAllowedImageHost = (hostname = '') => {
-    const host = String(hostname || '').toLowerCase();
-    if (!host) return false;
-    if (ALLOWED_IMAGE_HOSTS.has(host)) return true;
-    return host.endsWith('.googleusercontent.com');
 };
 
 const toDirectFormulaImageUrl = (imageUrl = '') => {
@@ -60,91 +47,36 @@ const toDirectFormulaImageUrl = (imageUrl = '') => {
     return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`;
 };
 
-const downloadImageBuffer = (urlString, redirectCount = 0) => new Promise((resolve, reject) => {
-    if (redirectCount > 5) {
-        return reject(new Error('Too many redirects'));
-    }
-
-    let parsed;
+// Zero-RAM Image Stream Piping
+exports.proxyDiagramImage = async (req, res, next) => {
     try {
-        parsed = new URL(urlString);
-    } catch (error) {
-        return reject(new Error('Invalid image URL'));
-    }
-
-    if (parsed.protocol !== 'https:') {
-        return reject(new Error('Only HTTPS image URLs are allowed'));
-    }
-    if (!isAllowedImageHost(parsed.hostname)) {
-        return reject(new Error('Image host is not allowed'));
-    }
-
-    const req = https.get(parsed, {
-        headers: {
-            'User-Agent': 'NEETForge-Formula-Proxy/1.0'
+        const driveUrl = req.query.driveUrl || req.query.url;
+        if (!driveUrl) {
+            return res.status(400).json({ success: false, error: 'Valid image URL required' });
         }
-    }, (upstream) => {
-        const status = upstream.statusCode || 500;
 
-        if ([301, 302, 303, 307, 308].includes(status)) {
-            const location = upstream.headers.location;
-            if (!location) {
-                return reject(new Error('Redirect without location'));
+        const normalized = normalizeFormulaImageUrl(driveUrl);
+
+        const upstream = await axios.get(normalized, {
+            responseType: 'stream',
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'NEETForge-Formula-Proxy/1.0'
             }
-            const nextUrl = new URL(location, parsed).toString();
-            upstream.resume();
-            return resolve(downloadImageBuffer(nextUrl, redirectCount + 1));
-        }
+        });
 
-        if (status < 200 || status >= 300) {
-            const chunks = [];
-            upstream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-            upstream.on('end', () => reject(new Error(`Upstream status ${status}`)));
-            return;
-        }
-
-        const contentType = String(upstream.headers['content-type'] || '').split(';')[0].trim();
-        if (!contentType.startsWith('image/')) {
-            const chunks = [];
-            upstream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-            upstream.on('end', () => reject(new Error('Upstream did not return image content')));
-            return;
-        }
-
-        const chunks = [];
-        upstream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        upstream.on('end', () => resolve({
-            contentType,
-            body: Buffer.concat(chunks)
-        }));
-    });
-
-    req.setTimeout(30000, () => {
-        req.destroy(new Error('Image request timed out'));
-    });
-    req.on('error', reject);
-});
-
-// Proxy formula image to avoid Google direct-link throttling in browser
-exports.proxyFormulaImage = async (req, res, next) => {
-    try {
-        const rawUrl = String(req.query.url || '').trim();
-        if (!rawUrl) {
-            return next(new ErrorResponse('url query param is required', 400));
-        }
-
-        const normalized = normalizeFormulaImageUrl(rawUrl);
-        const result = await downloadImageBuffer(normalized, 0);
-
-        res.setHeader('Content-Type', result.contentType || 'image/webp');
+        res.setHeader('Content-Type', upstream.headers['content-type'] || 'image/webp');
+        res.setHeader('Cache-Control', 'public, max-age=604800');
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=86400');
-        return res.status(200).send(result.body);
-    } catch (error) {
-        return next(new ErrorResponse(`Image proxy failed: ${error.message}`, 502));
+
+        upstream.data.pipe(res);
+    } catch (err) {
+        next(err);
     }
 };
+
+exports.proxyFormulaImage = exports.proxyDiagramImage;
 
 exports.getFormulaSubjects = async (req, res, next) => {
     try {
@@ -160,14 +92,6 @@ exports.getFormulaSubjects = async (req, res, next) => {
 
 exports.getFormulaTopics = async (req, res, next) => {
     try {
-        const { getMarksChapterId } = req.params;
-
-        // Find the chapter title first via the subject array if needed, or query topics directly
-        // The scraping script saved topics with chapterTitle and getMarksTopicId.
-        // It didn't save getMarksChapterId on the topic, but it saved chapterTitle. 
-        // Let's rely on finding the chapterTitle from the FormulaSubject or passing chapterTitle in the URL.
-
-        // In this case, let's just query topics by chapterTitle
         const { chapterTitle } = req.query;
 
         let query = {};
@@ -209,35 +133,162 @@ exports.getFormulaCards = async (req, res, next) => {
     }
 };
 
-// Update progress for a specific card
+// High-Speed SM-2 Due Deck Query
+exports.getDueDeck = async (req, res, next) => {
+    try {
+        const userId = req.user._id || req.user.id;
+        const { chapterTitle, topicTitle, limit = 50 } = req.query;
+
+        const query = {
+            userId,
+            nextReviewDate: { $lte: new Date() }
+        };
+
+        if (chapterTitle) query.chapterTitle = chapterTitle;
+        if (topicTitle) query.topicTitle = topicTitle;
+
+        const dueItems = await FormulaProgress.find(query)
+            .sort({ nextReviewDate: 1 })
+            .limit(parseInt(limit, 10))
+            .populate('cardId')
+            .lean();
+
+        const language = getPreferredLanguage(req);
+        const cards = dueItems
+            .filter(d => d.cardId)
+            .map(d => ({
+                ...d.cardId,
+                imgUrl: toDirectFormulaImageUrl(pickFormulaImageForLanguage(d.cardId, language)),
+                hindiImgUrl: toDirectFormulaImageUrl(d.cardId.hindiImgUrl || ''),
+                progress: {
+                    easeFactor: d.easeFactor,
+                    intervalDays: d.intervalDays,
+                    repetitions: d.repetitions,
+                    status: d.status,
+                    nextReviewDate: d.nextReviewDate,
+                    lastReviewedAt: d.lastReviewedAt
+                }
+            }));
+
+        res.status(200).json({
+            success: true,
+            count: cards.length,
+            data: cards
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// High-Speed SM-2 Batch Synchronization via bulkWrite
+exports.syncFormulaBatch = async (req, res, next) => {
+    try {
+        const { reviews } = req.body;
+        const userId = req.user._id || req.user.id;
+
+        if (!Array.isArray(reviews) || reviews.length === 0) {
+            return res.status(400).json({ success: false, error: 'Reviews array required' });
+        }
+
+        const cardIds = reviews.map(r => r.cardId);
+        const existingDocs = await FormulaProgress.find({ userId, cardId: { $in: cardIds } }).lean();
+        const docMap = new Map(existingDocs.map(d => [d.cardId.toString(), d]));
+
+        const bulkOps = reviews.map(rev => {
+            const current = docMap.get(rev.cardId.toString()) || {
+                easeFactor: 2.5,
+                intervalDays: 0,
+                repetitions: 0
+            };
+
+            const updated = sm2Service.calculateNextReview(current, rev.quality);
+
+            return {
+                updateOne: {
+                    filter: { userId, cardId: rev.cardId },
+                    update: {
+                        $set: {
+                            chapterTitle: rev.chapterTitle,
+                            topicTitle: rev.topicTitle,
+                            easeFactor: updated.easeFactor,
+                            intervalDays: updated.intervalDays,
+                            repetitions: updated.repetitions,
+                            nextReviewDate: updated.nextReviewDate,
+                            status: updated.status,
+                            lastReviewedAt: new Date()
+                        }
+                    },
+                    upsert: true
+                }
+            };
+        });
+
+        await FormulaProgress.bulkWrite(bulkOps, { ordered: false });
+
+        res.status(200).json({ success: true, count: reviews.length });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// Chapter Summary Aggregation (< 25ms index-covered)
+exports.getChapterSummary = async (req, res, next) => {
+    try {
+        const chapter = req.params.chapter || req.params.chapterTitle;
+        const userId = req.user._id || req.user.id;
+
+        const stats = await FormulaProgress.aggregate([
+            { $match: { userId, chapterTitle: chapter } },
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        const summary = { unseen: 0, learning: 0, memorized: 0, need_revision: 0 };
+        stats.forEach(s => {
+            if (summary[s._id] !== undefined) summary[s._id] = s.count;
+        });
+
+        res.status(200).json({ success: true, summary });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// Update progress for a single card
 exports.updateCardProgress = async (req, res, next) => {
     try {
         const { cardId } = req.params;
-        const { status, isBookmarked, chapterTitle, topicTitle } = req.body;
+        const { status, isBookmarked, chapterTitle, topicTitle, quality } = req.body;
+        const userId = req.user._id || req.user.id;
 
-        // Upsert progress
+        let sm2Update = {};
+        if (quality !== undefined) {
+            const current = await FormulaProgress.findOne({ userId, cardId }).lean() || {
+                easeFactor: 2.5,
+                intervalDays: 0,
+                repetitions: 0
+            };
+            sm2Update = sm2Service.calculateNextReview(current, quality);
+        }
+
         const progress = await FormulaProgress.findOneAndUpdate(
-            { userId: req.user.id, cardId },
+            { userId, cardId },
             {
-                userId: req.user.id,
+                userId,
                 cardId,
                 ...(status !== undefined && { status }),
                 ...(isBookmarked !== undefined && { isBookmarked }),
                 ...(chapterTitle && { chapterTitle }),
                 ...(topicTitle && { topicTitle }),
-                lastSeenAt: Date.now()
+                ...sm2Update,
+                lastReviewedAt: new Date()
             },
             { new: true, upsert: true }
         );
-
-        if (status === 'memorized') {
-            const UserActivityService = require('../services/userActivityService');
-            await UserActivityService.logActivity(req.user.id, 'formula_memorized', {
-                cardId,
-                chapterTitle: progress.chapterTitle,
-                topicTitle: progress.topicTitle
-            });
-        }
 
         res.status(200).json({
             success: true,
@@ -252,8 +303,9 @@ exports.updateCardProgress = async (req, res, next) => {
 exports.getTopicProgress = async (req, res, next) => {
     try {
         const { topicTitle } = req.params;
+        const userId = req.user._id || req.user.id;
         const language = getPreferredLanguage(req);
-        const rows = await FormulaProgress.find({ userId: req.user.id, topicTitle })
+        const rows = await FormulaProgress.find({ userId, topicTitle })
             .populate('cardId', 'title imgUrl hindiImgUrl subjectTitle chapterTitle topicTitle position')
             .lean();
 
@@ -274,12 +326,13 @@ exports.getTopicProgress = async (req, res, next) => {
     }
 };
 
-// Get progress summary for a chapter
+// Get progress summary for a chapter (legacy endpoint)
 exports.getChapterProgressSummary = async (req, res, next) => {
     try {
-        const { chapterTitle } = req.params;
+        const chapterTitle = req.params.chapterTitle || req.params.chapter;
+        const userId = req.user._id || req.user.id;
         const language = getPreferredLanguage(req);
-        const rows = await FormulaProgress.find({ userId: req.user.id, chapterTitle })
+        const rows = await FormulaProgress.find({ userId, chapterTitle })
             .populate('cardId', 'title imgUrl hindiImgUrl subjectTitle chapterTitle topicTitle position')
             .lean();
         const progress = rows.map((row) => {
@@ -292,10 +345,9 @@ exports.getChapterProgressSummary = async (req, res, next) => {
         });
         res.status(200).json({
             success: true,
-            data: progress // Return the array of progress documents, frontend will aggregate
+            data: progress
         });
     } catch (error) {
         next(error);
     }
 };
-

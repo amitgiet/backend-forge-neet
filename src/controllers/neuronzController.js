@@ -61,29 +61,117 @@ exports.reviewQuestion = async (req, res, next) => {
 };
 
 // @desc    Batch submit answers after completing a level quiz
-// @route   POST /api/neuronz/review/batch
+// @route   POST /api/neuronz/review/batch or POST /api/neuronz/review-batch
 // @access  Private
+const UserQuestion = require('../models/UserQuestion');
+const LEVEL_INTERVALS = [0, 24, 72, 120, 168, 240, 360, 720];
+
 exports.reviewBatch = async (req, res, next) => {
     try {
-        const { answers } = req.body; // [{ questionId, wasCorrect, timeSpent }]
-        if (!Array.isArray(answers) || answers.length === 0) {
-            return next(new ErrorResponse('answers array is required', 400));
+        const reviews = req.body.reviews || req.body.answers;
+        const userId = req.user._id || req.user.id;
+
+        if (!Array.isArray(reviews) || reviews.length === 0) {
+            return res.status(400).json({ success: false, error: 'reviews array required' });
         }
-        const results = [];
-        for (const item of answers) {
-            try {
-                const r = await NeuronzService.processQuestionAnswer(
-                    req.user.id,
-                    item.questionId,
-                    Boolean(item.wasCorrect),
-                    Number(item.timeSpent || 0)
-                );
-                results.push(r);
-            } catch (err) {
-                results.push({ questionId: item.questionId, error: err.message });
+
+        const qIds = reviews.map(r => String(r.questionId));
+        const existingDocs = await UserQuestion.find({ userId, questionId: { $in: qIds } }).lean();
+        const docMap = new Map(existingDocs.map(d => [d.questionId, d]));
+
+        const now = new Date();
+        let correctCount = 0;
+
+        const bulkOps = reviews.map(rev => {
+            const wasCorrect = Boolean(rev.wasCorrect);
+            if (wasCorrect) correctCount++;
+            const timeSpent = Number(rev.timeSpentSeconds ?? rev.timeSpent ?? 0);
+            const current = docMap.get(String(rev.questionId));
+            const currentLevel = current?.level || 1;
+            const currentStreak = current?.streak || 0;
+            const currentLapses = current?.lapses || 0;
+
+            let newLevel;
+            let newStreak;
+            let newLapses;
+            let nextRevision;
+            let isMastered = false;
+
+            if (wasCorrect) {
+                newLevel = Math.min(7, currentLevel + 1);
+                newStreak = currentStreak + 1;
+                newLapses = currentLapses;
+                const hours = LEVEL_INTERVALS[newLevel] || 24;
+                nextRevision = new Date(now.getTime() + hours * 3600000);
+                isMastered = (newLevel === 7);
+            } else {
+                newLevel = Math.max(1, currentLevel - 2);
+                newStreak = 0;
+                newLapses = currentLapses + 1;
+                nextRevision = new Date(now.getTime() + 4 * 3600000);
             }
-        }
-        res.status(200).json({ success: true, data: results });
+
+            return {
+                updateOne: {
+                    filter: { userId, questionId: String(rev.questionId) },
+                    update: {
+                        $set: {
+                            level: newLevel,
+                            streak: newStreak,
+                            lapses: newLapses,
+                            nextRevision,
+                            lastReviewed: now,
+                            isMastered
+                        },
+                        $inc: {
+                            totalAttempts: 1,
+                            correctAttempts: wasCorrect ? 1 : 0
+                        },
+                        $push: {
+                            userHistory: {
+                                $each: [{
+                                    date: now,
+                                    correct: wasCorrect,
+                                    levelAfter: newLevel,
+                                    timeSpent: timeSpent
+                                }],
+                                $slice: -7
+                            }
+                        }
+                    },
+                    upsert: true
+                }
+            };
+        });
+
+        await UserQuestion.bulkWrite(bulkOps, { ordered: false });
+        await NeuronzService.updateUserDailyProgress(userId, correctCount, reviews.length);
+
+        return res.status(200).json({ success: true, processedCount: reviews.length, data: { processedCount: reviews.length } });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Get structured stats for 7-level pyramid dashboard
+// @route   GET /api/neuronz/dashboard
+// @access  Private
+exports.getDashboard = async (req, res, next) => {
+    try {
+        const data = await NeuronzService.getDashboardStats(req.user.id || req.user._id);
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        next(new ErrorResponse(error.message, 500));
+    }
+};
+
+// @desc    Assemble Daily 20 Blitz session
+// @route   GET /api/neuronz/blitz
+// @access  Private
+exports.getDailyBlitz = async (req, res, next) => {
+    try {
+        const data = await NeuronzService.assembleDaily20Blitz(req.user.id || req.user._id);
+        res.status(200).json({ success: true, data });
     } catch (error) {
         next(new ErrorResponse(error.message, 500));
     }

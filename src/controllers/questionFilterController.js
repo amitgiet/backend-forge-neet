@@ -17,7 +17,7 @@ const {
     getPreferredLanguage,
     mapImportedQuestionsForLanguage,
 } = require('../utils/languagePreference');
-const { serializeImportedQuestionForClient } = require('../utils/questionPayload');
+const { serializeImportedQuestionForClient, serializeQuestionForClient } = require('../utils/questionPayload');
 
 const VALID_SUBJECTS = ['biology', 'chemistry', 'physics'];
 const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'];

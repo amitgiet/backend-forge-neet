@@ -26,58 +26,63 @@ exports.protect = async (req, res, next) => {
     }
 
     try {
-        // Handle demo token
-        if (token === 'demo-token-12345') {
-            req.user = {
-                _id: 'demo-user-id',
-                name: 'Demo User',
-                email: 'demo@example.com',
-                isActive: true,
-                subscription: { plan: 'free' },
-                isEmailVerified: true,
-                exams: [{ examType: 'NEET' }]
-            };
-            return next();
-        }
-
-        // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-        // Get user from token
-        req.user = await User.findById(decoded.id).select('-password');
+        const user = await User.findById(decoded.id)
+            .select('-password +tokenVersion')
+            .lean();
 
-        if (!req.user) {
+        if (!user) {
             return res.status(401).json({
                 success: false,
-                error: 'User not found'
+                code: 'USER_NOT_FOUND',
+                error: 'User account no longer exists'
             });
         }
 
-        // Check if user is active
-        if (!req.user.isActive) {
+        if (!user.isActive) {
             return res.status(403).json({
                 success: false,
-                error: 'Account is deactivated'
+                code: 'ACCOUNT_DEACTIVATED',
+                error: 'User account is deactivated'
             });
         }
 
+        if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+            return res.status(401).json({
+                success: false,
+                code: 'TOKEN_REVOKED',
+                error: 'Session has expired. Please log in again.'
+            });
+        }
+
+        req.user = user;
         next();
-    } catch (error) {
-        console.error('Auth middleware error:', error);
+    } catch (err) {
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                code: 'TOKEN_EXPIRED',
+                error: 'Session expired'
+            });
+        }
         return res.status(401).json({
             success: false,
-            error: 'Not authorized to access this route'
+            code: 'TOKEN_INVALID',
+            error: 'Invalid authentication token'
         });
     }
 };
 
 // Grant access to specific roles/plans
-exports.authorize = (...plans) => {
+exports.authorize = (...rolesOrPlans) => {
     return (req, res, next) => {
-        if (!plans.includes(req.user.subscription.plan)) {
+        const userPlan = req.user?.subscription?.plan;
+        const userRole = req.user?.role || 'user';
+        if (!rolesOrPlans.includes(userPlan) && !rolesOrPlans.includes(userRole)) {
             return res.status(403).json({
                 success: false,
-                error: `Subscription plan '${req.user.subscription.plan}' is not authorized to access this route. Required: ${plans.join(', ')}`
+                error: `Not authorized to access this route. Required: ${rolesOrPlans.join(', ')}`
             });
         }
         next();
@@ -126,9 +131,13 @@ exports.optionalAuth = async (req, res, next) => {
     if (token) {
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = await User.findById(decoded.id).select('-password');
+            const user = await User.findById(decoded.id).select('-password +tokenVersion').lean();
+            if (user && user.isActive && (decoded.tokenVersion === undefined || decoded.tokenVersion === user.tokenVersion)) {
+                req.user = user;
+            } else {
+                req.user = null;
+            }
         } catch (error) {
-            // Token invalid, but continue anyway
             req.user = null;
         }
     }

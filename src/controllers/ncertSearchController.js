@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 const http = require('http');
 const https = require('https');
+const axios = require('axios');
+const { URL } = require('url');
 const Chapter = require('../models/Chapter');
 const Topic = require('../models/Topic');
 const Question = require('../models/Question');
@@ -74,97 +76,70 @@ const getQuestionCorrectKey = (question) => {
     return correctOption?.key || null;
 };
 
-const downloadPdfOnce = (urlString, redirectCount = 0) => new Promise((resolve, reject) => {
-    if (redirectCount > 5) {
-        return reject(new Error('Too many redirects while fetching PDF'));
-    }
+const ALLOWED_HOSTS = new Set([
+    'ncert.nic.in',
+    'www.ncert.nic.in',
+    'cdn.neetforge.com'
+]);
 
-    let parsed;
+// Private IP ranges to reject immediately
+const DISALLOWED_IP_PATTERNS = [
+    /^127\./,                 // Loopback
+    /^169\.254\./,            // Link-local / AWS Cloud Metadata
+    /^10\./,                  // Class A private
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // Class B private
+    /^192\.168\./             // Class C private
+];
+
+function isHostPermitted(targetUrl) {
     try {
-        parsed = new URL(urlString);
-    } catch (error) {
-        return reject(new Error('Invalid PDF URL'));
+        const parsed = new URL(targetUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return false;
+        }
+
+        const hostname = parsed.hostname.toLowerCase();
+
+        // Check if hostname matches any private IP pattern
+        for (const pattern of DISALLOWED_IP_PATTERNS) {
+            if (pattern.test(hostname)) return false;
+        }
+
+        return ALLOWED_HOSTS.has(hostname);
+    } catch (e) {
+        return false;
     }
+}
 
-    const client = parsed.protocol === 'https:' ? https : http;
-    const req = client.request(parsed, {
-        method: 'GET',
-        headers: {
-            'User-Agent': 'Mozilla/5.0',
-            'Accept': 'application/pdf,*/*',
-            'Connection': 'close'
-        }
-    }, (response) => {
-        const statusCode = response.statusCode || 0;
-
-        if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
-            const redirectUrl = new URL(response.headers.location, parsed).toString();
-            response.resume();
-            return resolve(downloadPdfOnce(redirectUrl, redirectCount + 1));
-        }
-
-        if (statusCode < 200 || statusCode >= 300) {
-            response.resume();
-            return reject(new Error(`Upstream returned ${statusCode}`));
-        }
-
-        const chunks = [];
-        response.on('data', (chunk) => chunks.push(chunk));
-        response.on('end', () => {
-            const body = Buffer.concat(chunks);
-            resolve({
-                buffer: body,
-                headers: response.headers
-            });
-        });
-        response.on('error', reject);
-    });
-
-    req.setTimeout(15000, () => {
-        req.destroy(new Error('PDF fetch timeout'));
-    });
-    req.on('error', reject);
-    req.end();
-});
-
-const downloadPdfWithRetry = async (urlString, maxAttempts = 3) => {
-    let lastError;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            return await downloadPdfOnce(urlString, 0);
-        } catch (error) {
-            lastError = error;
-            const isLastAttempt = attempt === maxAttempts;
-            if (isLastAttempt) break;
-            await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
-        }
-    }
-    throw lastError;
-};
+exports.isHostPermitted = isHostPermitted;
 
 // @desc    Proxy NCERT PDF for iframe rendering (public, allowlisted domains only)
 // @route   GET /api/v1/ncert-search/pdf-proxy?url=...
 // @access  Public
-exports.proxyNcertPdf = async (req, res, next) => {
+exports.proxyNCERTPdf = async (req, res, next) => {
     try {
-        const rawUrl = req.query.url;
-        if (!rawUrl) {
-            return next(new ErrorResponse('url query param is required', 400));
+        const { url: targetUrl } = req.query;
+
+        if (!targetUrl || !isHostPermitted(targetUrl)) {
+            return res.status(403).json({
+                success: false,
+                code: 'SSRF_BLOCKED',
+                error: 'Security alert: The requested PDF resource host is not authorized.'
+            });
         }
 
-        let parsed;
-        try {
-            parsed = new URL(String(rawUrl));
-        } catch (error) {
-            return next(new ErrorResponse('Invalid url', 400));
-        }
-
-        const allowedHosts = new Set(['ncert.nic.in', 'www.ncert.nic.in']);
-        if (!allowedHosts.has(parsed.hostname)) {
-            return next(new ErrorResponse('Only NCERT URLs are allowed', 403));
-        }
-
-        const upstream = await downloadPdfWithRetry(parsed.toString(), 3);
+        // Axios request with redirect validation
+        const upstream = await axios.get(targetUrl, {
+            responseType: 'stream',
+            timeout: 15000,
+            maxRedirects: 3,
+            beforeRedirect: (options) => {
+                const redirectTarget = `${options.protocol}//${options.host}${options.path}`;
+                if (!isHostPermitted(redirectTarget)) {
+                    throw new Error('Redirect to non-whitelisted host blocked');
+                }
+            }
+        });
 
         const allowedFrameAncestors = [
             "'self'",
@@ -180,17 +155,23 @@ exports.proxyNcertPdf = async (req, res, next) => {
         res.setHeader('Content-Security-Policy', `frame-ancestors ${allowedFrameAncestors.join(' ')};`);
 
         const contentType = upstream.headers['content-type'] || 'application/pdf';
-        const contentDisposition = upstream.headers['content-disposition'] || 'inline';
+        const contentDisposition = upstream.headers['content-disposition'] || 'inline; filename="ncert_chapter.pdf"';
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', contentDisposition);
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', 'public, max-age=604800'); // 7-day edge cache
 
-        return res.status(200).send(upstream.buffer);
-    } catch (error) {
-        next(error);
+        // ZERO-RAM STREAM PIPING: Direct pipe upstream chunks to response socket
+        upstream.data.pipe(res);
+    } catch (err) {
+        if (err.message && err.message.includes('Redirect to non-whitelisted')) {
+            return res.status(403).json({ success: false, code: 'SSRF_BLOCKED', error: 'SSRF redirect blocked' });
+        }
+        next(err);
     }
 };
+
+exports.proxyNcertPdf = exports.proxyNCERTPdf;
 
 // @desc    Get available subjects for NCERT search flow
 // @route   GET /api/v1/ncert-search/subjects

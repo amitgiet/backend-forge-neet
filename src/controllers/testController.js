@@ -11,6 +11,7 @@ const {
   normalizeQuestionType,
   buildTypeDataFromImported,
   serializeQuestionDocForClient,
+  serializeQuestionForClient,
   evaluateQuestionAttempt,
   answerPayloadHasValue,
 } = require('../utils/questionPayload');
@@ -63,28 +64,60 @@ exports.startTest = async (req, res) => {
     }
 
     const language = getPreferredLanguage(req);
+    const now = new Date();
+    const durationMinutes = test.config?.duration || 200;
+    const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000);
 
     // Create attempt
     const attempt = new TestAttempt({
       userId,
       testId,
-      startedAt: new Date(),
+      startedAt: now,
+      expiresAt,
+      durationMinutes,
       status: 'in-progress',
-      answers: test.questions.map(q => ({
-        questionId: q._id,
-        selectedOption: null,
-        answerType: normalizeQuestionType(q.questionType),
-        answerPayload: null,
-        isCorrect: false,
-        marksAwarded: 0,
-        evaluationStatus: null,
-        evaluationReason: null,
-        timeSpent: 0,
-        isMarkedForReview: false
-      }))
+      serverTimestamps: {
+        startedAt: now,
+        expiresAt,
+        submittedAt: null
+      },
+      wallClockRemainingSeconds: durationMinutes * 60,
+      answers: test.questions.map((q, idx) => {
+        let sectionKey = null;
+        if (idx < 35) sectionKey = 'PHY_A';
+        else if (idx < 50) sectionKey = 'PHY_B';
+        else if (idx < 85) sectionKey = 'CHEM_A';
+        else if (idx < 100) sectionKey = 'CHEM_B';
+        else if (idx < 135) sectionKey = 'BOT_A';
+        else if (idx < 150) sectionKey = 'BOT_B';
+        else if (idx < 185) sectionKey = 'ZOO_A';
+        else if (idx < 200) sectionKey = 'ZOO_B';
+
+        return {
+          questionId: q._id,
+          sectionKey,
+          selectedOption: null,
+          answerType: normalizeQuestionType(q.questionType),
+          answerPayload: null,
+          isCorrect: false,
+          marksAwarded: 0,
+          evaluationStatus: null,
+          evaluationReason: null,
+          timeSpent: 0,
+          timeSpentSeconds: 0,
+          isMarkedForReview: false
+        };
+      })
     });
 
     await attempt.save();
+
+    const redisService = require('../services/redisService');
+    await redisService.hset(`exam:active:${attempt._id}`, {
+      userId: String(userId),
+      expiresAt: expiresAt.toISOString(),
+      lastSyncedAt: now.toISOString()
+    });
 
     // Increment attempt count
     test.totalAttempts++;
@@ -99,7 +132,7 @@ exports.startTest = async (req, res) => {
           title: test.title,
           type: test.type,
           config: test.config,
-          questions: test.questions.map((question) => serializeQuestionDocForClient(question, language))
+          questions: test.questions.map((question) => serializeQuestionForClient(question, language))
         }
       }
     });
@@ -143,6 +176,50 @@ exports.saveAnswer = async (req, res) => {
   }
 };
 
+// Sync batch answers (atomic bulkWrite)
+exports.syncBatchAnswers = async (req, res, next) => {
+  try {
+    const { attemptId } = req.params;
+    const { batch } = req.body;
+
+    if (!Array.isArray(batch) || batch.length === 0) {
+      return res.status(400).json({ success: false, error: 'Batch array required' });
+    }
+
+    const bulkOps = batch.map((item) => ({
+      updateOne: {
+        filter: {
+          _id: attemptId,
+          'answers.questionId': item.questionId,
+          status: { $in: ['in-progress', 'IN_PROGRESS'] }
+        },
+        update: {
+          $set: {
+            'answers.$.selectedOption': item.selectedOption || null,
+            'answers.$.answerPayload': item.answerPayload ?? null,
+            'answers.$.isMarkedForReview': !!item.isMarkedForReview,
+            'answers.$.attemptedAt': item.attemptedAt ? new Date(item.attemptedAt) : new Date()
+          },
+          $inc: {
+            'answers.$.timeSpentSeconds': item.timeSpentSeconds || item.timeSpent || 0,
+            'answers.$.timeSpent': item.timeSpent || item.timeSpentSeconds || 0
+          }
+        }
+      }
+    }));
+
+    await TestAttempt.bulkWrite(bulkOps, { ordered: false });
+
+    const redisService = require('../services/redisService');
+    await redisService.hset(`exam:active:${attemptId}`, 'lastSyncedAt', new Date().toISOString());
+
+    return res.status(200).json({ success: true, syncedCount: batch.length });
+  } catch (error) {
+    if (typeof next === 'function') return next(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // Submit test
 exports.submitTest = async (req, res) => {
   try {
@@ -157,7 +234,7 @@ exports.submitTest = async (req, res) => {
       return res.status(404).json({ message: 'Attempt not found' });
     }
 
-    if (attempt.status !== 'in-progress') {
+    if (attempt.status !== 'in-progress' && attempt.status !== 'IN_PROGRESS') {
       return res.status(400).json({ message: 'Test already submitted' });
     }
 
@@ -168,7 +245,7 @@ exports.submitTest = async (req, res) => {
     attempt.answers.forEach(answer => {
       const question = questions.find(q => q._id.toString() === answer.questionId.toString());
       if (question) {
-        const serializedQuestion = serializeQuestionDocForClient(question, 'en');
+        const serializedQuestion = serializeQuestionForClient(question, 'en');
         const evaluation = evaluateQuestionAttempt(serializedQuestion, answer, test.config);
         answer.isCorrect = evaluation.isCorrect;
         answer.marksAwarded = evaluation.marksAwarded;
@@ -183,14 +260,14 @@ exports.submitTest = async (req, res) => {
     // Calculate rank
     const betterAttempts = await TestAttempt.countDocuments({
       testId: test._id,
-      status: 'submitted',
+      status: { $in: ['submitted', 'SUBMITTED'] },
       'results.percentage': { $gt: attempt.results.percentage }
     });
     attempt.results.rank = betterAttempts + 1;
 
     const totalAttempts = await TestAttempt.countDocuments({
       testId: test._id,
-      status: 'submitted'
+      status: { $in: ['submitted', 'SUBMITTED'] }
     });
     attempt.results.percentile = totalAttempts > 0 ? ((totalAttempts - betterAttempts) / totalAttempts) * 100 : 100;
 
@@ -206,7 +283,13 @@ exports.submitTest = async (req, res) => {
 
     attempt.status = 'submitted';
     attempt.submittedAt = new Date();
+    if (attempt.serverTimestamps) {
+      attempt.serverTimestamps.submittedAt = attempt.submittedAt;
+    }
     await attempt.save();
+
+    const redisService = require('../services/redisService');
+    await redisService.deleteExamKeys(attemptId);
 
     // Feed attempted test questions into NeuronZ (L1 enrollment).
     // Group by source so source metadata remains meaningful.
@@ -257,13 +340,13 @@ exports.submitTest = async (req, res) => {
     const attemptObject = attempt.toObject ? attempt.toObject() : attempt;
     const language = getPreferredLanguage(req);
     if (attemptObject?.testId?.questions) {
-      attemptObject.testId.questions = attemptObject.testId.questions.map((question) => serializeQuestionDocForClient(question, language));
+      attemptObject.testId.questions = attemptObject.testId.questions.map((question) => serializeQuestionForClient(question, language));
     }
     if (Array.isArray(attemptObject?.answers)) {
       attemptObject.answers = attemptObject.answers.map((answer) => ({
         ...answer,
         questionId: answer?.questionId && typeof answer.questionId === 'object'
-          ? serializeQuestionDocForClient(answer.questionId, language)
+          ? serializeQuestionForClient(answer.questionId, language)
           : answer.questionId,
       }));
     }
@@ -291,13 +374,13 @@ exports.getAttempt = async (req, res) => {
     const attemptObject = attempt.toObject ? attempt.toObject() : attempt;
     const language = getPreferredLanguage(req);
     if (attemptObject?.testId?.questions) {
-      attemptObject.testId.questions = attemptObject.testId.questions.map((question) => serializeQuestionDocForClient(question, language));
+      attemptObject.testId.questions = attemptObject.testId.questions.map((question) => serializeQuestionForClient(question, language));
     }
     if (Array.isArray(attemptObject?.answers)) {
       attemptObject.answers = attemptObject.answers.map((answer) => ({
         ...answer,
         questionId: answer?.questionId && typeof answer.questionId === 'object'
-          ? serializeQuestionDocForClient(answer.questionId, language)
+          ? serializeQuestionForClient(answer.questionId, language)
           : answer.questionId,
       }));
     }

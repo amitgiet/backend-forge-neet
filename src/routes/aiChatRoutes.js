@@ -7,7 +7,8 @@ const {
     getChatHistory,
     createNewChat,
     deleteChat,
-    submitFeedback
+    submitFeedback,
+    streamDoubtChat
 } = require('../controllers/aiChatController');
 
 router.use(protect);
@@ -25,6 +26,7 @@ const aiChatLimiter = rateLimit({
 });
 
 router.post('/message', aiChatLimiter, sendMessage);
+router.post('/stream', streamDoubtChat);
 router.post('/new', createNewChat);
 router.get('/history/:chatId?', getChatHistory);
 router.post('/feedback', submitFeedback);

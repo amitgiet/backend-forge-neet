@@ -41,8 +41,9 @@ router.get('/:subject/chapters/:chapterId/topics', getTopicsByChapter);
 // Get sub-topics (with UIDs) for a specific chapter; optional ?topic= filter
 router.get('/:subject/chapters/:chapterId/subtopics', getSubTopics);
 
-// Fetch actual questions by UID list: ?uids=10101,10102&page=1&limit=20
+// Fetch actual questions by UID list: ?uids=10101,10102&subject=physics&page=1&limit=20
 router.get('/questions', getQuestionsByUIDs);
+router.get('/questions/by-uids', getQuestionsByUIDs);
 
 // Track imported curriculum quiz attempt per sub-topic
 router.post('/attempts', trackSubTopicAttempt);

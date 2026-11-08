@@ -19,6 +19,7 @@ router.get('/:topicId', getTopicById);
 
 // Admin routes (protected)
 router.use(protect); // All routes below require authentication
+router.use(authorize('admin')); // Rejects standard students with HTTP 403
 
 router.post('/add', addTopic);
 router.put('/:topicId', updateTopic);

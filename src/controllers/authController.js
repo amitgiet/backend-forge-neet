@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const Token = require('../models/Token');
+const OtpVerification = require('../models/OtpVerification');
+const fast2smsService = require('../services/sms/fast2sms.service');
 const StudySession = require('../models/StudySession');
 const TestAttempt = require('../models/TestAttempt');
 const QuizMeta = require('../models/QuizMeta');
@@ -291,21 +293,32 @@ exports.updatePassword = async (req, res, next) => {
 };
 
 // @desc    Logout user / clear cookie
-// @route   GET /api/v1/auth/logout
+// @route   GET|POST /api/v1/auth/logout
 // @access  Private
 exports.logout = async (req, res, next) => {
-    res.cookie('token', 'none', {
-        expires: new Date(Date.now() + 10 * 1000),
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/'
-    });
+    try {
+        if (req.user?._id || req.user?.id) {
+            await User.findByIdAndUpdate(req.user._id || req.user.id, {
+                $inc: { tokenVersion: 1 }
+            });
+        }
 
-    res.status(200).json({
-        success: true,
-        data: {}
-    });
+        res.cookie('token', 'none', {
+            expires: new Date(Date.now() + 10 * 1000),
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/'
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Logged out from all sessions',
+            data: {}
+        });
+    } catch (error) {
+        next(error);
+    }
 };
 
 // @desc    Add exam to user profile
@@ -738,33 +751,45 @@ exports.getTodayQuest = async (req, res, next) => {
 // @access  Public
 exports.sendOtp = async (req, res, next) => {
     try {
-        const { email } = req.body;
+        const { phone } = req.body;
 
-        if (!email) {
-            return next(new ErrorResponse('Please provide an email address', 400));
+        if (!phone || !/^[6-9]\d{9}$/.test(phone)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Please enter a valid 10-digit mobile number'
+            });
         }
 
-        const user = await User.findOne({ email });
-        if (!user) {
-            return next(new ErrorResponse('User not found with this email', 404));
+        const existingOtp = await OtpVerification.findOne({ phone, expiresAt: { $gt: new Date() } });
+        if (existingOtp && existingOtp.lastSentAt && (Date.now() - existingOtp.lastSentAt.getTime() < 30000)) {
+            return res.status(429).json({
+                success: false,
+                error: 'Please wait 30 seconds before requesting a new OTP'
+            });
         }
 
-        // Generate OTP
-        const otp = generateOTP();
+        const otp = crypto.randomInt(100000, 1000000).toString();
+        const salt = await bcrypt.genSalt(10);
+        const otpHash = await bcrypt.hash(otp, salt);
 
-        // Hash OTP and save to user
-        const otpSalt = await bcrypt.genSalt(10);
-        user.emailVerificationToken = await bcrypt.hash(otp, otpSalt); // Reusing field for generic OTP
-        user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 mins expiry
+        await OtpVerification.findOneAndUpdate(
+            { phone },
+            {
+                phone,
+                otpHash,
+                attempts: 0,
+                isVerified: false,
+                expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+                lastSentAt: new Date()
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
 
-        await user.save({ validateBeforeSave: false });
-
-        // Mock Send Email/SMS (In prod, use Nodemailer/Twilio)
-        console.log(`[NEETForge Auth] OTP for ${email}: ${otp}`.yellow.bold);
+        await fast2smsService.sendOtp(phone, otp);
 
         res.status(200).json({
             success: true,
-            message: 'OTP sent to email (Check server console for demo)'
+            message: 'OTP sent successfully'
         });
     } catch (error) {
         next(error);
@@ -776,42 +801,88 @@ exports.sendOtp = async (req, res, next) => {
 // @access  Public
 exports.verifyOtpLogin = async (req, res, next) => {
     try {
-        const { email, otp } = req.body;
+        const { phone, otp, fcmToken, timezone, userAgent } = req.body;
 
-        if (!email || !otp) {
-            return next(new ErrorResponse('Please provide email and OTP', 400));
+        if (!phone || !otp) {
+            return res.status(400).json({
+                success: false,
+                error: 'Please provide phone and OTP'
+            });
         }
 
-        const user = await User.findOne({
-            email,
-            resetPasswordExpire: { $gt: Date.now() } // Check expiry
+        const record = await OtpVerification.findOne({
+            phone,
+            expiresAt: { $gt: new Date() }
         });
 
-        if (!user) {
-            return next(new ErrorResponse('Invalid or expired OTP', 400));
+        if (!record) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid or expired OTP'
+            });
         }
 
-        // Check OTP
-        const isMatch = await bcrypt.compare(otp, user.emailVerificationToken);
+        if (record.attempts >= 3) {
+            await OtpVerification.deleteOne({ _id: record._id });
+            return res.status(400).json({
+                success: false,
+                error: 'Too many invalid attempts. Please request a new OTP.'
+            });
+        }
 
+        const isMatch = await bcrypt.compare(otp, record.otpHash);
         if (!isMatch) {
-            return next(new ErrorResponse('Invalid OTP', 400));
+            const nextAttempts = record.attempts + 1;
+            if (nextAttempts >= 3) {
+                await OtpVerification.deleteOne({ _id: record._id });
+                return res.status(400).json({
+                    success: false,
+                    error: 'Too many invalid attempts. Please request a new OTP.'
+                });
+            }
+            await OtpVerification.updateOne({ _id: record._id }, { $inc: { attempts: 1 } });
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid OTP'
+            });
         }
 
-        // Clear OTP fields
-        user.emailVerificationToken = undefined;
-        user.resetPasswordExpire = undefined;
+        await OtpVerification.deleteOne({ _id: record._id });
 
-        // Mark verified if not already
-        if (!user.isEmailVerified) user.isEmailVerified = true;
+        let user = await User.findOne({ phone });
+        if (!user) {
+            user = await User.create({
+                name: 'NEET Aspirant',
+                phone,
+                phoneVerifiedOnly: true,
+                isPhoneVerified: true,
+                primaryExam: 'NEET_UG',
+                exams: [{
+                    examType: 'NEET_UG',
+                    targetYear: new Date().getFullYear() + 1,
+                    isActive: true
+                }],
+                profile: {
+                    class: 12,
+                    preferredLanguage: 'hi'
+                }
+            });
+        } else {
+            user.isPhoneVerified = true;
+            user.lastLoginAt = new Date();
+            user.updateStreak();
+            await user.save({ validateBeforeSave: false });
+        }
 
-        user.lastLoginAt = new Date(); // Update login time
-        user.updateStreak(); // Update streak on login
-        await user.save({ validateBeforeSave: false });
+        if (fcmToken) {
+            await Token.findOneAndUpdate(
+                { fcmToken },
+                { user: user._id, fcmToken, timezone: timezone || 'UTC', userAgent: userAgent || 'mobile_app' },
+                { upsert: true, new: true }
+            );
+        }
 
-        // Login successful
         sendTokenResponse(user, 200, res);
-
     } catch (error) {
         next(error);
     }
@@ -819,15 +890,14 @@ exports.verifyOtpLogin = async (req, res, next) => {
 
 // Helper function to get token from model, create cookie and send response
 const sendTokenResponse = (user, statusCode, res) => {
-    // Create token
     const token = user.getSignedJwtToken();
 
     const options = {
         expires: new Date(
-            Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000
+            Date.now() + (process.env.JWT_COOKIE_EXPIRE || 30) * 24 * 60 * 60 * 1000
         ),
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/'
     };
@@ -842,7 +912,9 @@ const sendTokenResponse = (user, statusCode, res) => {
                 id: user._id,
                 name: user.name,
                 email: user.email,
-                subscription: user.subscription.plan,
+                phone: user.phone,
+                role: user.role || 'user',
+                subscription: user.subscription?.plan || 'free',
                 primaryExam: user.primaryExam,
                 profile: {
                     preferredLanguage: user.profile?.preferredLanguage || 'hi'
@@ -859,30 +931,44 @@ const sendTokenResponse = (user, statusCode, res) => {
 exports.googleLogin = async (req, res, next) => {
     try {
         const { idToken, fcmToken, timezone, userAgent } = req.body;
-        
+
         if (!idToken) {
-            return res.status(400).json({ success: false, error: 'Please provide an Google ID token' });
+            return res.status(400).json({ success: false, error: 'Please provide a Google ID token' });
         }
 
-        const { OAuth2Client } = require('google-auth-library');
         const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-        const ticket = await client.verifyIdToken({
-            idToken,
-        });
-        const payload = ticket.getPayload();
-        
-        const { email, name, picture } = payload;
-        const User = require('../models/User');
+        const audience = [
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_ID_WEB,
+            process.env.GOOGLE_CLIENT_ID_ANDROID,
+            process.env.GOOGLE_CLIENT_ID_IOS
+        ].filter(Boolean);
 
-        let user = await User.findOne({ email });
+        let ticket;
+        if (audience.length > 0) {
+            ticket = await client.verifyIdToken({ idToken, audience });
+        } else {
+            ticket = await client.verifyIdToken({ idToken });
+        }
+        const payload = ticket.getPayload();
+
+        const { email, name, picture, sub } = payload;
+
+        let user = await User.findOne({
+            $or: [
+                { googleId: sub },
+                ...(email ? [{ email }] : [])
+            ]
+        });
 
         if (!user) {
             user = await User.create({
-                name,
+                name: name || 'NEET Aspirant',
                 email,
                 avatar: picture,
                 fromGoogle: true,
-                isPhoneVerified: false,
+                googleId: sub,
+                isEmailVerified: true,
                 primaryExam: 'NEET_UG',
                 exams: [{
                     examType: 'NEET_UG',
@@ -894,14 +980,17 @@ exports.googleLogin = async (req, res, next) => {
                     preferredLanguage: 'hi'
                 }
             });
+        } else {
+            user.fromGoogle = true;
+            user.googleId = sub;
+            user.isEmailVerified = true;
+            if (picture && !user.avatar) user.avatar = picture;
+            user.lastLoginAt = new Date();
+            user.updateStreak();
+            await user.save({ validateBeforeSave: false });
         }
 
-        user.lastLoginAt = new Date();
-        user.updateStreak();
-        await user.save({ validateBeforeSave: false });
-
         if (fcmToken) {
-            const Token = require('../models/Token');
             await Token.findOneAndUpdate(
                 { fcmToken },
                 { user: user._id, fcmToken, timezone: timezone || 'UTC', userAgent: userAgent || 'mobile_app' },
@@ -910,7 +999,6 @@ exports.googleLogin = async (req, res, next) => {
         }
 
         sendTokenResponse(user, 200, res);
-
     } catch (error) {
         console.error('Google Sign-In Error:', error);
         return res.status(401).json({ success: false, error: 'Invalid Google token' });

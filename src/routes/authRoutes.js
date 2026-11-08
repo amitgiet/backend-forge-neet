@@ -42,6 +42,7 @@ router.put('/profile', updateProfile);
 router.put('/onboarding', updateOnboarding);
 router.put('/password', updatePassword);
 router.get('/logout', logout);
+router.post('/logout', logout);
 router.post('/exams', addExam);
 
 module.exports = router;

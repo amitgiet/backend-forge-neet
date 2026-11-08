@@ -10,12 +10,15 @@ const SubscriptionPaymentSchema = new mongoose.Schema(
         },
         planCode: {
             type: String,
-            enum: ['PRO_MONTHLY'],
-            required: true
+            default: 'PRO_MONTHLY'
+        },
+        plan: {
+            type: String,
+            default: 'pro'
         },
         baseAmountPaise: {
             type: Number,
-            required: true
+            default: 0
         },
         discountAmountPaise: {
             type: Number,
@@ -23,7 +26,11 @@ const SubscriptionPaymentSchema = new mongoose.Schema(
         },
         finalAmountPaise: {
             type: Number,
-            required: true
+            default: 0
+        },
+        amountPaise: {
+            type: Number,
+            default: 0
         },
         currency: {
             type: String,
@@ -44,18 +51,27 @@ const SubscriptionPaymentSchema = new mongoose.Schema(
         },
         razorpayOrderId: {
             type: String,
-            required: true,
-            unique: true
+            default: null,
+            sparse: true
         },
         razorpayPaymentId: {
             type: String,
             default: null,
-            sparse: true,
-            unique: true
+            sparse: true
+        },
+        orderId: {
+            type: String,
+            default: null,
+            sparse: true
+        },
+        paymentId: {
+            type: String,
+            default: null,
+            sparse: true
         },
         status: {
             type: String,
-            enum: ['created', 'pending_webhook_confirmation', 'paid', 'failed', 'refunded'],
+            enum: ['created', 'pending_webhook_confirmation', 'paid', 'failed', 'refunded', 'captured'],
             default: 'created',
             index: true
         },

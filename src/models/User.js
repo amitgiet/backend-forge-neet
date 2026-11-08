@@ -14,8 +14,14 @@ const UserSchema = new mongoose.Schema({
 
     email: {
         type: String,
-        required: [true, 'Please provide an email'],
+        required: [
+            function() {
+                return !this.phoneVerifiedOnly;
+            },
+            'Please provide an email'
+        ],
         unique: true,
+        sparse: true,
         lowercase: true,
         match: [
             /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
@@ -25,14 +31,54 @@ const UserSchema = new mongoose.Schema({
 
     password: {
         type: String,
-        required: [true, 'Please provide a password'],
+        required: [
+            function() {
+                return !this.fromGoogle && !this.fromApple && !this.phoneVerifiedOnly;
+            },
+            'Please provide a password'
+        ],
         minlength: [6, 'Password must be at least 6 characters'],
-        select: false // Don't return password in queries by default
+        select: false
     },
 
     phone: {
         type: String,
+        sparse: true,
         match: [/^[0-9]{10}$/, 'Please provide a valid 10-digit phone number']
+    },
+
+    role: {
+        type: String,
+        enum: ['user', 'admin'],
+        default: 'user'
+    },
+
+    fromGoogle: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+
+    fromApple: {
+        type: Boolean,
+        default: false
+    },
+
+    phoneVerifiedOnly: {
+        type: Boolean,
+        default: false
+    },
+
+    googleId: {
+        type: String,
+        default: null,
+        sparse: true,
+        index: true
+    },
+
+    tokenVersion: {
+        type: Number,
+        default: 0
     },
 
     // Exam Preferences (Multi-exam support)
@@ -97,8 +143,7 @@ const UserSchema = new mongoose.Schema({
         currentPeriodStart: { type: Date },
         currentPeriodEnd: { type: Date },
         lastPaymentId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'SubscriptionPayment'
+            type: mongoose.Schema.Types.Mixed
         }
     },
 
@@ -237,12 +282,10 @@ const UserSchema = new mongoose.Schema({
 });
 
 // Indexes for performance
-UserSchema.index({ email: 1 });
 UserSchema.index({ 'exams.examType': 1 });
 UserSchema.index({ 'subscription.plan': 1 });
 UserSchema.index({ 'gamification.totalXP': -1 });
 UserSchema.index({ 'progress.chapterId': 1 });
-UserSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
 
 // Hash password before saving
 UserSchema.pre('save', async function (next) {
@@ -250,7 +293,7 @@ UserSchema.pre('save', async function (next) {
         this.referralCode = `NF${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     }
 
-    if (!this.isModified('password')) {
+    if (!this.isModified('password') || !this.password) {
         return next();
     }
     const salt = await bcrypt.genSalt(10);
@@ -260,15 +303,21 @@ UserSchema.pre('save', async function (next) {
 
 // Method to compare passwords
 UserSchema.methods.matchPassword = async function (enteredPassword) {
+    if (!this.password) return false;
     return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Generate JWT Token
 UserSchema.methods.getSignedJwtToken = function () {
     return jwt.sign(
-        { id: this._id, email: this.email },
+        {
+            id: this._id,
+            email: this.email,
+            role: this.role || 'user',
+            tokenVersion: this.tokenVersion || 0
+        },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRE }
+        { expiresIn: process.env.JWT_EXPIRE || '30d' }
     );
 };
 

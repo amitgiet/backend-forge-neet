@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 
 const UserQuestionSchema = new mongoose.Schema({
     userId: {
@@ -48,6 +48,11 @@ const UserQuestionSchema = new mongoose.Schema({
         default: 0
     },
 
+    lapses: {
+        type: Number,
+        default: 0
+    },
+
     // Last 7 attempts history
     userHistory: [{
         date: { type: Date, default: Date.now },
@@ -85,30 +90,39 @@ UserQuestionSchema.methods.getNextRevisionDate = function (level, lastReviewed =
 };
 
 // Update question level after a NeuronZ review attempt
-// Correct   â†’ advance one level (max L7)
-// Incorrect â†’ STAY at same level (no drop, per NeuronZ spec)
-UserQuestionSchema.methods.updateLevel = function (wasCorrect, timeSpent = 0) {
+// Correct   → advance one level (max L7)
+// Incorrect → drop 2 levels (floor at 1), increment lapses, mandatory 4-hour re-test
+UserQuestionSchema.methods.updateLevel = function (wasCorrect, timeSpentSeconds = 0) {
     this.totalAttempts += 1;
+    this.lastReviewed = new Date();
 
     if (wasCorrect) {
         this.correctAttempts += 1;
         this.streak += 1;
         this.level = Math.min(7, this.level + 1);
-    } else {
-        this.streak = 0;
-        // Stay at same level â€” no drop
-        this.level = Math.max(1, this.level);
-    }
 
-    this.lastReviewed = new Date();
-    this.nextRevision = this.getNextRevisionDate(this.level, this.lastReviewed);
-    this.isMastered = (this.level === 7);
+        // Schedule according to level interval
+        const hours = LEVEL_INTERVALS[this.level] || 24;
+        this.nextRevision = new Date(this.lastReviewed.getTime() + hours * 3600000);
+        this.isMastered = (this.level === 7);
+    } else {
+        // CRITICAL ANTI-SRS FIX:
+        this.streak = 0;
+        this.lapses = (this.lapses || 0) + 1;
+        this.isMastered = false;
+
+        // Drop 2 levels (Floor at Level 1)
+        this.level = Math.max(1, this.level - 2);
+
+        // Mandatory immediate 4-hour re-test queue
+        this.nextRevision = new Date(this.lastReviewed.getTime() + 4 * 3600000);
+    }
 
     this.userHistory.push({
         date: this.lastReviewed,
         correct: wasCorrect,
         levelAfter: this.level,
-        timeSpent
+        timeSpent: timeSpentSeconds
     });
 
     if (this.userHistory.length > 7) {

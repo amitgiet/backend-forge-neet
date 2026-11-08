@@ -10,9 +10,10 @@ describe('DataSummaryService', () => {
     AITools.getOverallAccuracy.mockResolvedValue(null);
     AITools.getLastQuiz.mockResolvedValue([]);
     AITools.getWeakTopics.mockResolvedValue([]);
-    AITools.getRevisionDue.mockResolvedValue({ total: 0 });
+    AITools.getRevisionDue.mockResolvedValue(null);
     AITools.getStudyInsights.mockResolvedValue(null);
     AITools.getAccuracyTrend.mockResolvedValue([]);
+    AITools.getCombinedPerformanceTrend.mockResolvedValue(null);
 
     const res = await DataSummaryService.generateMasterSummary('user1');
     expect(res.isSufficient).toBe(false);
@@ -25,10 +26,10 @@ describe('DataSummaryService', () => {
     AITools.getWeakTopics.mockResolvedValue([{ topic: 'X' }]);
     AITools.getRevisionDue.mockResolvedValue({ total: 0 });
     AITools.getStudyInsights.mockResolvedValue({ completed: 2, goal: 10 });
-    AITools.getAccuracyTrend.mockResolvedValue([
-      { date: '2026-02-10', accuracy: 68 },
-      { date: '2026-02-24', accuracy: 72 }
-    ]);
+    AITools.getCombinedPerformanceTrend.mockResolvedValue({
+      summary: { status: 'improving', change: 4 },
+      trend: [{ date: '2026-02-10', accuracy: 68 }]
+    });
 
     const res = await DataSummaryService.generateMasterSummary('user2');
     expect(res.isSufficient).toBe(true);

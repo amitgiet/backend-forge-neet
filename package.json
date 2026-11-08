@@ -41,7 +41,13 @@
         "podcast:tts:update": "node scripts/podcastTranscribeAndRegenerate.js --update",
         "podcast:tts:bio": "node scripts/podcastTranscribeAndRegenerate.js --subject=biology",
         "podcast:tts:chem": "node scripts/podcastTranscribeAndRegenerate.js --subject=chemistry",
-        "podcast:tts:phy": "node scripts/podcastTranscribeAndRegenerate.js --subject=physics"
+        "podcast:tts:phy": "node scripts/podcastTranscribeAndRegenerate.js --subject=physics",
+        "audit:sync:dry": "node scripts/syncAllAuditFindings.js --dry-run",
+        "audit:sync:live": "node scripts/syncAllAuditFindings.js --live",
+        "migrate:images:r2": "node scripts/migrateMemoneetImagesToR2.js --concurrency 10",
+        "migrate:images:r2:dry": "node scripts/migrateMemoneetImagesToR2.js --dry-run",
+        "apply:images:r2": "node scripts/applyMemoneetImageR2ToDB.js --apply",
+        "apply:images:r2:dry": "node scripts/applyMemoneetImageR2ToDB.js --dry-run"
     },
     "keywords": [
         "neet",
@@ -53,9 +59,12 @@
     "author": "NEETForge Team",
     "license": "MIT",
     "dependencies": {
+        "@aws-sdk/client-s3": "^3.1164.0",
+        "@aws-sdk/lib-storage": "^3.1164.0",
         "@google/generative-ai": "^0.21.0",
         "axios": "^1.13.6",
         "bcryptjs": "^2.4.3",
+        "bullmq": "^6.7.2",
         "colors": "^1.4.0",
         "compression": "^1.7.4",
         "cookie-parser": "^1.4.6",
@@ -70,6 +79,7 @@
         "googleapis": "^171.4.0",
         "helmet": "^7.1.0",
         "http": "^0.0.1-security",
+        "ioredis": "^6.0.0",
         "jsonwebtoken": "^9.0.2",
         "moment": "^2.30.1",
         "moment-timezone": "^0.6.1",
@@ -81,6 +91,7 @@
         "pdf-parse": "^1.1.1",
         "pdfkit": "^0.17.2",
         "razorpay": "^2.9.6",
+        "sharp": "^0.35.5",
         "socket.io": "^4.8.3",
         "sqlite3": "^6.0.1",
         "stripe": "^14.10.0",

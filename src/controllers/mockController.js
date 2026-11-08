@@ -1,7 +1,12 @@
+const mongoose = require('mongoose');
 const MockTest = require('../models/MockTest');
 const TestAttempt = require('../models/TestAttempt');
 const MockTestProgress = require('../models/MockTestProgress');
+const User = require('../models/User');
+const scoringService = require('../services/exam/scoringService');
+const redisService = require('../services/redisService');
 const ErrorResponse = require('../utils/errorResponse');
+const { serializeQuestionForClient } = require('../utils/questionPayload');
 const http = require('http');
 const https = require('https');
 
@@ -123,6 +128,25 @@ exports.getMockTests = async (req, res, next) => {
     }
 };
 
+// @desc    Get mock test by id with enriched questions
+// @route   GET /api/v1/mocks/:id
+// @access  Private
+exports.getMockTestById = async (req, res, next) => {
+    try {
+        const test = await MockTest.findById(req.params.id).populate('questions');
+        if (!test) {
+            return next(new ErrorResponse(`Mock test not found with id of ${req.params.id}`, 404));
+        }
+        const testObj = test.toObject ? test.toObject() : test;
+        if (Array.isArray(testObj.questions)) {
+            testObj.questions = testObj.questions.map((q) => serializeQuestionForClient(q));
+        }
+        res.status(200).json({ success: true, data: testObj });
+    } catch (error) {
+        next(error);
+    }
+};
+
 // @desc    Get mock completion progress for current user
 // @route   GET /api/v1/mocks/progress
 // @access  Private
@@ -176,21 +200,48 @@ exports.startTestAttempt = async (req, res, next) => {
         }
 
         // Check if user has access to this test
-        const plan = req.user.subscription.plan;
+        const plan = req.user?.subscription?.plan;
         if (test.accessType === 'PRO' && plan === 'free') {
             return next(new ErrorResponse('This test requires a Pro subscription', 403));
         }
 
+        const now = new Date();
+        const durationMinutes = test.config?.durationMinutes || test.duration || 200;
+        const expiresAt = new Date(now.getTime() + durationMinutes * 60 * 1000);
+
         // Create a new test attempt
         const attempt = await TestAttempt.create({
-            userId: req.user.id,
-            testId: test.testId,
-            attemptNumber: (await TestAttempt.countDocuments({ userId: req.user.id, testId: test.testId })) + 1,
+            userId: req.user.id || req.user._id,
+            testId: test.testId || test._id,
+            testType: 'FULL_MOCK',
+            attemptNumber: (await TestAttempt.countDocuments({ userId: req.user.id || req.user._id, testId: test.testId || test._id })) + 1,
+            startedAt: now,
+            expiresAt,
+            durationMinutes,
+            status: 'IN_PROGRESS',
+            serverTimestamps: {
+                startedAt: now,
+                expiresAt,
+                submittedAt: null
+            },
+            wallClockRemainingSeconds: durationMinutes * 60,
             score: {
-                totalQuestions: test.config.totalQuestions,
-                totalMarks: test.config.totalMarks
+                totalQuestions: test.config?.totalQuestions || 200,
+                totalMarks: test.config?.totalMarks || 720
             }
         });
+
+        // Anchor wall-clock timer in Redis
+        await redisService.hset(`exam:active:${attempt._id}`, {
+            userId: String(req.user.id || req.user._id),
+            expiresAt: expiresAt.toISOString(),
+            lastSyncedAt: now.toISOString()
+        });
+
+        const deviceId = req.headers['x-device-id'] || req.body?.deviceId;
+        if (deviceId) {
+            await redisService.set(`exam:active:${attempt._id}:device`, String(deviceId), 'EX', 12600);
+        }
 
         res.status(201).json({
             success: true,
@@ -202,58 +253,82 @@ exports.startTestAttempt = async (req, res, next) => {
 };
 
 // @desc    Submit a mock test attempt
-// @route   POST /api/v1/mocks/attempt/:attemptId/submit
+// @route   POST /api/v1/mocks/attempt/:attemptId/submit or POST /api/v1/mocks/:id/submit
 // @access  Private
-exports.submitTestAttempt = async (req, res, next) => {
+exports.submitMockTest = async (req, res, next) => {
     try {
-        const { responses, timeSpent } = req.body;
-        let attempt = await TestAttempt.findById(req.params.attemptId);
+        const attemptId = req.params.attemptId || req.params.id;
+        if (!mongoose.Types.ObjectId.isValid(attemptId)) {
+            return res.status(400).json({ success: false, error: 'Invalid attempt ID' });
+        }
 
-        if (!attempt) return next(new ErrorResponse('Attempt not found', 404));
+        const attempt = await TestAttempt.findById(attemptId);
+        if (!attempt) {
+            return res.status(404).json({ success: false, error: 'Attempt not found' });
+        }
 
-        attempt.responses = responses;
-        attempt.timeSpent = timeSpent;
-        attempt.status = 'COMPLETED';
+        if (attempt.status === 'SUBMITTED' || attempt.status === 'submitted') {
+            return res.status(200).json({ success: true, message: 'Already submitted', results: attempt.results });
+        }
+
+        // Apply incoming final responses/answers if included in body
+        if (Array.isArray(req.body.answers)) {
+            attempt.answers = req.body.answers;
+        } else if (Array.isArray(req.body.responses)) {
+            attempt.responses = req.body.responses;
+            if ((!attempt.answers || attempt.answers.length === 0) && req.body.responses.length > 0) {
+                attempt.answers = req.body.responses.map(r => ({
+                    questionId: r.questionId,
+                    selectedOption: r.selectedOption || r.answer || null,
+                    timeSpentSeconds: r.timeSpent || 0,
+                    attemptedAt: r.attemptedAt || new Date()
+                }));
+            }
+        }
+
+        if (req.body.timeSpent !== undefined) {
+            attempt.timeSpent = req.body.timeSpent;
+        }
+
+        // Grade test through dedicated scoring service
+        const evaluatedResults = await scoringService.calculateScore(attempt);
+        attempt.results = evaluatedResults;
+        attempt.status = 'SUBMITTED';
         attempt.submittedAt = new Date();
-
-        // Perform scoring and analysis
-        await attempt.calculateScore();
-        await attempt.analyzeByChapter();
+        if (attempt.serverTimestamps) {
+            attempt.serverTimestamps.submittedAt = attempt.submittedAt;
+        }
 
         await attempt.save();
 
-        // Update user analytics
-        const User = require('../models/User');
-        const user = await User.findById(req.user.id);
-        user.analytics.totalMocksAttempted += 1;
-        user.analytics.totalQuestionsAttempted += attempt.score.attempted;
-        user.analytics.totalQuestionsCorrect += attempt.score.correct;
-        user.analytics.overallAccuracy = user.calculateOverallAccuracy();
+        // Atomic User Analytics increment (No read-modify-write)
+        const userId = req.user?.id || req.user?._id;
+        if (userId) {
+            await User.findByIdAndUpdate(userId, {
+                $inc: {
+                    'analytics.totalMocksAttempted': 1,
+                    'analytics.totalQuestionsAttempted': evaluatedResults.totalAttempted || 0,
+                    'analytics.totalQuestionsCorrect': evaluatedResults.totalCorrect || 0,
+                    'gamification.totalXP': 300,
+                    'gamification.coins': 50
+                }
+            });
+        }
 
-        // Update streaks and XP
-        user.updateStreak();
-        user.gamification.totalXP += 300; // Flat XP for mock completion
-        user.gamification.coins += 50;
+        // Delete active exam Redis keys
+        await redisService.deleteExamKeys(attemptId);
 
-        await user.save();
-
-        const UserActivityService = require('../services/userActivityService');
-        await UserActivityService.logActivity(req.user.id, 'mock_test_submitted', {
-            attemptId: attempt._id,
-            testId: attempt.testId,
-            timeSpent: attempt.timeSpent,
-            marksObtained: attempt.score?.marksObtained || 0,
-            percentage: attempt.score?.percentage || 0
-        });
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
+            results: attempt.results,
             data: attempt
         });
-    } catch (error) {
-        next(error);
+    } catch (err) {
+        next(err);
     }
 };
+
+exports.submitTestAttempt = exports.submitMockTest;
 
 // @desc    Proxy mock test PDF for in-app iframe rendering
 // @route   GET /api/v1/mocks/pdf-proxy?url=...

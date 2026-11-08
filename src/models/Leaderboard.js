@@ -109,11 +109,47 @@ leaderboardSchema.statics.getUserRank = async function(userId) {
   };
 };
 
+const moment = require('moment-timezone');
+
+/**
+ * Updates streak evaluating midnight boundary strictly in Asia/Kolkata.
+ * @param {Object} user - User document or entry object
+ * @param {Date} lastCompletedAt - Timestamp of prior completion
+ */
+const evaluateISTStreak = (user, lastCompletedAt) => {
+  const nowIST = moment().tz('Asia/Kolkata');
+  const todayStr = nowIST.format('YYYY-MM-DD');
+  const yesterdayStr = nowIST.clone().subtract(1, 'day').format('YYYY-MM-DD');
+
+  if (!lastCompletedAt) {
+    return { streak: 1, streakMaintained: true };
+  }
+
+  const lastCompletedIST = moment(lastCompletedAt).tz('Asia/Kolkata').format('YYYY-MM-DD');
+
+  if (lastCompletedIST === todayStr) {
+    return { streak: user?.gamification?.dailyStreak || user?.streak || 1, streakMaintained: true };
+  }
+
+  if (lastCompletedIST === yesterdayStr) {
+    return { streak: (user?.gamification?.dailyStreak || user?.streak || 0) + 1, streakMaintained: true };
+  }
+
+  const shieldsAvailable = user?.gamification?.streakShields || 0;
+  if (shieldsAvailable > 0) {
+    if (user?.gamification) user.gamification.streakShields -= 1;
+    return {
+      streak: user?.gamification?.dailyStreak || user?.streak || 1,
+      shieldConsumed: true,
+      streakMaintained: true
+    };
+  }
+
+  return { streak: 1, streakMaintained: false };
+};
+
 // Static method to update user score
 leaderboardSchema.statics.updateUserScore = async function(userId, username, score, xpReward) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
   let entry = await this.findOne({ userId });
   
   if (!entry) {
@@ -130,18 +166,11 @@ leaderboardSchema.statics.updateUserScore = async function(userId, username, sco
       totalPoints: score
     });
   } else {
-    const lastCompleted = entry.lastCompletedDate ? new Date(entry.lastCompletedDate) : null;
-    const isToday = lastCompleted && lastCompleted.toDateString() === new Date().toDateString();
-    
-    // Check if this is consecutive day
-    let streak = entry.streak || 0;
-    if (!isToday) {
-      streak = 1;
-    }
+    const streakResult = evaluateISTStreak(entry, entry.lastCompletedDate);
     
     entry.totalXP += xpReward;
     entry.score = Math.max(entry.score || 0, score);
-    entry.streak = streak;
+    entry.streak = streakResult.streak;
     entry.completedToday = true;
     entry.lastCompletedDate = new Date();
     entry.dailyChallengesCompleted = (entry.dailyChallengesCompleted || 0) + 1;
@@ -152,4 +181,8 @@ leaderboardSchema.statics.updateUserScore = async function(userId, username, sco
   return entry;
 };
 
-module.exports = mongoose.model('Leaderboard', leaderboardSchema);
+const Leaderboard = mongoose.model('Leaderboard', leaderboardSchema);
+Leaderboard.evaluateISTStreak = evaluateISTStreak;
+
+module.exports = Leaderboard;
+module.exports.evaluateISTStreak = evaluateISTStreak;

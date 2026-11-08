@@ -196,10 +196,13 @@ app.use(`/api/${API_VERSION}/analytics`, require('./src/routes/analyticsRoutes')
 app.use(`/api/${API_VERSION}/doubts`, require('./src/routes/doubtRoutes'));
 app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionFilterRoutes'));
 app.use(`/api/${API_VERSION}/formulas`, require('./src/routes/formulaRoutes'));
+app.use(`/api/${API_VERSION}/flashcards`, require('./src/routes/flashcardRoutes'));
+app.use(`/api/${API_VERSION}/revision`, require('./src/routes/flashcardRoutes'));
 app.use(`/api/${API_VERSION}/test-series`, require('./src/routes/testSeriesRoutes'));
 app.use(`/api/${API_VERSION}/activities`, require('./src/routes/userActivityRoutes'));
 app.use(`/api/${API_VERSION}/billing`, require('./src/routes/billingRoutes'));
 app.use(`/api/${API_VERSION}/marketing`, require('./src/routes/marketingRoutes'));
+app.use(`/api/${API_VERSION}/leaderboard`, require('./src/routes/leaderboardRoutes'));
 
 // More routes will be added here
 // app.use(`/api/${API_VERSION}/questions`, require('./src/routes/questionRoutes'));

@@ -49,16 +49,6 @@ const dailyChallengeSchema = new mongoose.Schema({
     required: false
   },
   description: String,
-  completedBy: [{
-    userId: mongoose.Schema.Types.ObjectId,
-    score: Number,
-    xpEarned: Number,
-    answers: [Number], // User's selected option indices
-    completedAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
   isActive: {
     type: Boolean,
     default: true
@@ -101,15 +91,16 @@ dailyChallengeSchema.statics.getTodaysChallenge = async function() {
 
 // Static method to check if user completed today's challenge
 dailyChallengeSchema.statics.hasUserCompletedToday = async function(userId) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const DailyChallengeAttempt = require('./DailyChallengeAttempt');
+  const moment = require('moment-timezone');
+  const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
   
-  const challenge = await this.findOne({
-    date: today,
-    'completedBy.userId': userId
+  const attempt = await DailyChallengeAttempt.findOne({
+    userId,
+    dateIST: todayIST
   });
   
-  return !!challenge;
+  return !!attempt;
 };
 
 module.exports = mongoose.model('DailyChallenge', dailyChallengeSchema);

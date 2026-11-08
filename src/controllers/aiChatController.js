@@ -1,9 +1,10 @@
-const AIAgentService = require('../services/aiAgentService');
+const aiAgentService = require('../services/aiAgentService');
 const Chat = require('../models/Chat');
 const ChatSummaryService = require('../services/chatSummaryService');
 const AIUsage = require('../models/AIUsage');
+const redisClient = require('../config/redis');
 
-const aiAgent = new AIAgentService();
+const aiAgent = aiAgentService;
 
 // @desc    Send message to AI assistant
 // @route   POST /api/ai-chat/message
@@ -224,5 +225,76 @@ exports.submitFeedback = async (req, res) => {
     } catch (error) {
         console.error('Submit feedback error:', error);
         res.status(500).json({ success: false, message: 'Failed to record feedback' });
+    }
+};
+
+// @desc    Real-time SSE token streaming for doubt resolution
+// @route   POST /api/v1/ai-chat/stream
+// @access  Private
+exports.streamDoubtChat = exports.streamChat = async (req, res, next) => {
+    const { message, imageBase64, strikeLevel = 1, chatId } = req.body;
+    const userId = req.user._id || req.user.id;
+
+    if (!message && !imageBase64) {
+        return res.status(400).json({ success: false, error: 'Message or image required' });
+    }
+
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const quotaKey = `quota:user:${userId}:${today}`;
+    if (redisClient) {
+        const usedToday = await redisClient.get(quotaKey);
+        const limit = req.user?.subscription?.plan === 'pro' ? 200 : 20;
+        if (usedToday && parseInt(usedToday, 10) >= limit) {
+            return res.status(429).json({
+                success: false,
+                code: 'DAILY_QUOTA_EXCEEDED',
+                error: 'Daily AI doubt limit reached. Upgrade to Pro for 200 questions/day.'
+            });
+        }
+    }
+
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    });
+
+    res.write(`event: start\ndata: ${JSON.stringify({ strikeLevel, startedAt: Date.now() })}\n\n`);
+
+    try {
+        await aiAgentService.streamDoubtResolution({
+            message,
+            imageBase64,
+            strikeLevel,
+            userContext: { class: req.user?.profile?.targetClass || req.user?.currentClass || 12 },
+            onChunk: (chunkText) => {
+                res.write(`event: chunk\ndata: ${JSON.stringify({ text: chunkText })}\n\n`);
+            },
+            onComplete: async ({ fullText, promptTokens, candidateTokens }) => {
+                await AIUsage.create({
+                    userId,
+                    service: 'doubt_solver',
+                    promptTokens,
+                    completionTokens: candidateTokens,
+                    totalTokens: promptTokens + candidateTokens,
+                    metadata: { strikeLevel, hasImage: !!imageBase64 }
+                });
+
+                if (redisClient) {
+                    await redisClient.incr(quotaKey);
+                    await redisClient.expire(quotaKey, 86400);
+                }
+
+                res.write(`event: end\ndata: ${JSON.stringify({
+                    tokensUsed: promptTokens + candidateTokens,
+                    completedAt: Date.now()
+                })}\n\n`);
+                res.end();
+            }
+        });
+    } catch (err) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.end();
     }
 };

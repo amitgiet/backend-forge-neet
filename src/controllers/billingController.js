@@ -14,9 +14,11 @@ const PLAN_CODE = 'PRO_MONTHLY';
 exports.initiateCheckout = async (req, res, next) => {
     try {
         const userId = req.user._id;
-        const { planCode, couponCode, referralCode } = req.body;
+        const planCode = req.body.planCode || req.body.planId || PLAN_CODE;
+        const { couponCode, referralCode } = req.body;
 
-        if (planCode !== PLAN_CODE) {
+        const { BILLING_PLANS } = require('../config/billingConfig');
+        if (!BILLING_PLANS[planCode]) {
             return res.status(400).json({ success: false, message: 'Invalid plan code' });
         }
 
@@ -86,6 +88,12 @@ exports.initiateCheckout = async (req, res, next) => {
 
         return res.status(200).json({
             success: true,
+            keyId: process.env.RAZORPAY_KEY_ID,
+            order: {
+                id: razorpayOrder.id,
+                amount: pricing.finalAmountPaise,
+                currency: 'INR'
+            },
             checkout: {
                 keyId: process.env.RAZORPAY_KEY_ID,
                 orderId: razorpayOrder.id,
@@ -322,3 +330,19 @@ exports.disableCoupon = async (req, res, next) => {
         return next(error);
     }
 };
+
+// @desc    List all payments (admin)
+// @route   GET /api/v1/billing/admin/payments
+// @access  Private (admin)
+exports.listAllPayments = async (req, res, next) => {
+    try {
+        const payments = await SubscriptionPayment.find().sort({ createdAt: -1 });
+        return res.status(200).json({ success: true, data: payments });
+    } catch (error) {
+        return next(error);
+    }
+};
+
+exports.createOrder = exports.initiateCheckout;
+exports.verifyClientPayment = exports.verifyCheckout;
+

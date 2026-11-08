@@ -71,3 +71,6 @@ dist-ssr
 /public-site/
 /public-app/
 /public-frontend/
+*.jsonl
+scripts/temp_*
+scripts/temp_pdf/

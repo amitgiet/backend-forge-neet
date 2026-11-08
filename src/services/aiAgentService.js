@@ -59,6 +59,70 @@ class AIAgentService {
     });
   }
 
+  getModelInstance({ strikeLevel = 1, userContext = {} } = {}) {
+    const systemPrompt = this.buildSocraticPrompt(strikeLevel, userContext);
+
+    return this.genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash-lite',
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 1024
+      }
+    });
+  }
+
+  buildSocraticPrompt(strikeLevel, userContext = {}) {
+    return `You are NEETForge AI Mentor, an expert Socratic tutor for NEET UG (Physics, Chemistry, Biology).
+Target Student: Class ${userContext.class || '12'} Aspirant.
+STRICT SOCRATIC 3-STRIKE PROTOCOL:
+- Current Strike Level: ${strikeLevel}
+${strikeLevel === 1 ? 'STRIKE 1: Never reveal the direct answer or final formula. Ask ONE guiding conceptual question that points to the core physical or biological law.' : ''}
+${strikeLevel === 2 ? 'STRIKE 2: Provide the relevant equation or principle (e.g. "\\Delta U = Q - W") in LaTeX. Guide the student on how to substitute variables.' : ''}
+${strikeLevel === 3 ? 'STRIKE 3: Provide the complete step-by-step derivation with clean LaTeX math ($...$ or $$...$$), numerical calculation, and a key NEET Trap memory tip.' : ''}
+Always output mathematical expressions and chemical formulas in valid LaTeX syntax.`;
+  }
+
+  async streamDoubtResolution({ message, imageBase64, strikeLevel = 1, userContext = {}, onChunk, onComplete }) {
+    const model = this.getModelInstance({ strikeLevel, userContext });
+
+    const parts = [];
+    if (imageBase64) {
+      parts.push({
+        inlineData: {
+          mimeType: 'image/webp',
+          data: imageBase64
+        }
+      });
+    }
+    parts.push({ text: message });
+
+    const resultStream = await model.generateContentStream({
+      contents: [{ role: 'user', parts }]
+    });
+
+    let accumulatedText = '';
+
+    for await (const chunk of resultStream.stream) {
+      const chunkText = chunk.text();
+      accumulatedText += chunkText;
+      if (onChunk) onChunk(chunkText);
+    }
+
+    const response = await resultStream.response;
+    const usage = response?.usageMetadata || { promptTokenCount: 0, candidatesTokenCount: 0 };
+
+    if (onComplete) {
+      onComplete({
+        fullText: accumulatedText,
+        promptTokens: usage.promptTokenCount,
+        candidateTokens: usage.candidatesTokenCount
+      });
+    }
+  }
+
   getFunctionDeclarations() {
     return DECLARATIONS.map(([name, description, properties, required]) => ({
       name,
@@ -357,9 +421,7 @@ class AIAgentService {
 
       if (mode === 'doubt') {
         const normalizedHistory = Array.isArray(chatHistory) ? [...chatHistory].slice(-8) : [];
-        const historyText = normalizedHistory
-          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${String(m.content || '')}`)
-          .join('\n');
+        while (normalizedHistory.length > 0 && normalizedHistory[0].role !== 'user') normalizedHistory.shift();
 
         const systemPrompt = this.buildSystemPrompt({
           mode,
@@ -369,17 +431,20 @@ class AIAgentService {
           language
         });
 
-        const doubtPrompt = [
-          systemPrompt,
-          '',
-          historyText ? `Recent chat context:\n${historyText}` : '',
-          '',
-          `Student question: ${String(message || '').trim()}`,
-          '',
-          'Return only the answer content in markdown.'
-        ].join('\n');
+        const doubtModel = this.genAI.getGenerativeModel({
+          model: 'gemini-2.5-flash-lite',
+          systemInstruction: { parts: [{ text: systemPrompt }] }
+        });
 
-        const result = await this.doubtModel.generateContent(doubtPrompt);
+        const chat = doubtModel.startChat({
+          history: normalizedHistory.map((m) => ({
+            role: m.role === 'user' ? 'user' : 'model',
+            parts: [{ text: String(m.content || '') }]
+          })),
+          generationConfig: { temperature: 0.3, maxOutputTokens: 1024 }
+        });
+
+        const result = await chat.sendMessage(String(message || '').trim());
         const doubtText = result?.response?.text?.();
         const messageText = (typeof doubtText === 'string' && doubtText.trim().length > 0)
           ? doubtText.trim()
@@ -425,12 +490,17 @@ class AIAgentService {
       const normalizedHistory = Array.isArray(chatHistory) ? [...chatHistory] : [];
       while (normalizedHistory.length > 0 && normalizedHistory[0].role !== 'user') normalizedHistory.shift();
 
-      const chat = this.model.startChat({
+      const systemPrompt = this.buildSystemPrompt({ mode, userContext, chatSummary, summaryText: dataSummary.summaryText, language });
+      const chatModel = this.genAI.getGenerativeModel({
+        model: 'gemini-2.5-flash-lite',
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        tools: [{ functionDeclarations: this.getFunctionDeclarations() }]
+      });
+      const chat = chatModel.startChat({
         history: normalizedHistory.map((msg) => ({ role: msg.role, parts: [{ text: msg.content }] })),
         generationConfig: { temperature: mode === 'coach' ? 0.25 : 0.35, maxOutputTokens: 1200 }
       });
-      const systemPrompt = this.buildSystemPrompt({ mode, userContext, chatSummary, summaryText: dataSummary.summaryText, language });
-      let result = await chat.sendMessage(systemPrompt + '\n\nStudent: ' + message);
+      let result = await chat.sendMessage(message);
       let response = result.response;
       let iterations = 0;
 
@@ -491,4 +561,18 @@ class AIAgentService {
   }
 }
 
-module.exports = AIAgentService;
+const defaultInstance = new AIAgentService();
+
+const proxy = new Proxy(AIAgentService, {
+  get(target, prop, receiver) {
+    if (prop in target) return target[prop];
+    const val = defaultInstance[prop];
+    return typeof val === 'function' ? val.bind(defaultInstance) : val;
+  },
+  construct(target, argArray) {
+    return new target(...argArray);
+  }
+});
+proxy.AIAgentService = AIAgentService;
+
+module.exports = proxy;

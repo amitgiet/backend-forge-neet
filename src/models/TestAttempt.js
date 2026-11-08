@@ -5,52 +5,142 @@ const testAttemptSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true
   },
   
   testId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Test',
-    required: true
+    required: true,
+    index: true
+  },
+
+  testType: {
+    type: String,
+    enum: ['FULL_MOCK', 'CHAPTER_QUIZ', 'CUSTOM_PRACTICE'],
+    default: 'FULL_MOCK'
+  },
+
+  attemptNumber: {
+    type: Number,
+    default: 1
   },
   
-  // Attempt Details
+  // Wall-Clock Anchoring & Timestamps
   startedAt: {
     type: Date,
-    required: true
+    required: true,
+    default: Date.now
+  },
+
+  expiresAt: {
+    type: Date,
+    index: true
   },
   
-  submittedAt: Date,
+  submittedAt: {
+    type: Date,
+    default: null
+  },
+
+  durationMinutes: {
+    type: Number,
+    default: 200
+  },
   
   status: {
     type: String,
-    enum: ['in-progress', 'submitted', 'abandoned'],
-    default: 'in-progress'
+    enum: ['in-progress', 'submitted', 'abandoned', 'IN_PROGRESS', 'SUBMITTED', 'EXPIRED'],
+    default: 'IN_PROGRESS',
+    index: true
+  },
+
+  serverTimestamps: {
+    startedAt: {
+      type: Date,
+      default: Date.now
+    },
+    expiresAt: {
+      type: Date,
+      default: null
+    },
+    submittedAt: {
+      type: Date,
+      default: null
+    }
+  },
+
+  wallClockRemainingSeconds: {
+    type: Number,
+    default: null
+  },
+
+  sectionBSelections: {
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({ PHY_B: [], CHEM_B: [], BOT_B: [], ZOO_B: [] })
+  },
+
+  scoringBreakdown: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
   },
   
   // Answers
   answers: [{
     questionId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Question'
+      ref: 'Question',
+      required: true
     },
-    selectedOption: String, // 'A', 'B', 'C', 'D' or answer text
+    sectionKey: {
+      type: String,
+      enum: ['PHY_A', 'PHY_B', 'CHEM_A', 'CHEM_B', 'BOT_A', 'BOT_B', 'ZOO_A', 'ZOO_B', null],
+      default: null
+    },
+    selectedOption: {
+      type: String,
+      default: null
+    },
     answerType: String,
     answerPayload: mongoose.Schema.Types.Mixed,
-    isCorrect: Boolean,
-    marksAwarded: Number,
+    isCorrect: {
+      type: Boolean,
+      default: false
+    },
+    marksAwarded: {
+      type: Number,
+      default: 0
+    },
+    isIgnoredExceedLimit: {
+      type: Boolean,
+      default: false
+    },
     evaluationStatus: {
       type: String,
       enum: ['correct', 'incorrect', 'partial', 'ungraded', null],
-      default: null,
+      default: null
     },
     evaluationReason: {
       type: String,
-      default: null,
+      default: null
     },
-    timeSpent: Number, // seconds spent on this question
-    isMarkedForReview: Boolean,
-    attemptedAt: Date
+    timeSpent: {
+      type: Number,
+      default: 0
+    },
+    timeSpentSeconds: {
+      type: Number,
+      default: 0
+    },
+    isMarkedForReview: {
+      type: Boolean,
+      default: false
+    },
+    attemptedAt: {
+      type: Date,
+      default: null
+    }
   }],
   
   // Results
@@ -69,7 +159,9 @@ const testAttemptSchema = new mongoose.Schema({
     
     totalMarks: Number,
     marksObtained: Number,
+    maxMarks: { type: Number, default: 720 },
     percentage: Number,
+    accuracy: Number,
     
     // Subject-wise breakdown
     subjectWise: [{
@@ -82,6 +174,13 @@ const testAttemptSchema = new mongoose.Schema({
       marks: Number,
       accuracy: Number
     }],
+
+    subjectBreakdown: {
+      physics: { marks: Number, correct: Number, incorrect: Number, unattempted: Number, accuracy: Number },
+      chemistry: { marks: Number, correct: Number, incorrect: Number, unattempted: Number, accuracy: Number },
+      botany: { marks: Number, correct: Number, incorrect: Number, unattempted: Number, accuracy: Number },
+      zoology: { marks: Number, correct: Number, incorrect: Number, unattempted: Number, accuracy: Number }
+    },
     
     // Chapter-wise breakdown
     chapterWise: [{
@@ -103,7 +202,7 @@ const testAttemptSchema = new mongoose.Schema({
     
     // Time analysis
     timeAnalysis: {
-      totalTime: Number, // seconds
+      totalTime: Number,
       avgTimePerQuestion: Number,
       fastestQuestion: Number,
       slowestQuestion: Number
@@ -116,9 +215,20 @@ const testAttemptSchema = new mongoose.Schema({
       videoTotal: Number
     },
     
-    // Rank (calculated after submission)
+    // Rank & Percentile
     rank: Number,
+    predictedRank: Number,
     percentile: Number
+  },
+
+  score: {
+    totalQuestions: Number,
+    totalMarks: Number,
+    attempted: Number,
+    correct: Number,
+    incorrect: Number,
+    marksObtained: Number,
+    percentage: Number
   },
   
   // Weak Areas Identified
@@ -128,17 +238,52 @@ const testAttemptSchema = new mongoose.Schema({
     topic: String,
     questionsWrong: Number,
     accuracy: Number
-  }]
+  }],
+
+  responses: mongoose.Schema.Types.Mixed,
+  timeSpent: Number
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
 // Indexes
 testAttemptSchema.index({ userId: 1, testId: 1 });
 testAttemptSchema.index({ userId: 1, status: 1 });
-testAttemptSchema.index({ testId: 1, 'results.percentage': -1 }); // For ranking
+testAttemptSchema.index({ status: 1, expiresAt: 1 });
+testAttemptSchema.index({ userId: 1, testId: 1, status: 1 });
+testAttemptSchema.index({ testId: 1, 'results.percentage': -1 });
 
-// Calculate results
+// Pre-save hook to synchronize serverTimestamps & wallClockRemainingSeconds
+testAttemptSchema.pre('save', function(next) {
+  if (!this.serverTimestamps) {
+    this.serverTimestamps = {};
+  }
+  if (this.startedAt && !this.serverTimestamps.startedAt) {
+    this.serverTimestamps.startedAt = this.startedAt;
+  }
+  if (this.expiresAt && !this.serverTimestamps.expiresAt) {
+    this.serverTimestamps.expiresAt = this.expiresAt;
+  }
+  if (this.submittedAt && !this.serverTimestamps.submittedAt) {
+    this.serverTimestamps.submittedAt = this.submittedAt;
+  }
+  const expiry = this.serverTimestamps.expiresAt || this.expiresAt;
+  if (expiry) {
+    this.wallClockRemainingSeconds = Math.max(0, Math.floor((new Date(expiry).getTime() - Date.now()) / 1000));
+  }
+  next();
+});
+
+// Virtual for wallClockRemainingSeconds
+testAttemptSchema.virtual('remainingSeconds').get(function() {
+  const expiry = this.serverTimestamps?.expiresAt || this.expiresAt;
+  if (!expiry) return null;
+  return Math.max(0, Math.floor((new Date(expiry).getTime() - Date.now()) / 1000));
+});
+
+// Calculate results (legacy support)
 testAttemptSchema.methods.calculateResults = function(questions) {
   const results = {
     totalQuestions: this.answers.length,
@@ -204,7 +349,7 @@ testAttemptSchema.methods.calculateResults = function(questions) {
     }
     
     results.marksObtained += answer.marksAwarded || 0;
-    totalTime += answer.timeSpent || 0;
+    totalTime += answer.timeSpent || answer.timeSpentSeconds || 0;
     
     if (question) {
       if (!isGraded) {
@@ -218,7 +363,6 @@ testAttemptSchema.methods.calculateResults = function(questions) {
       }
 
       if (isGraded) {
-        // Subject-wise score math should ignore ungraded learning items.
         if (!subjectMap[question.subject]) {
           subjectMap[question.subject] = { total: 0, attempted: 0, correct: 0, incorrect: 0, partial: 0, marks: 0 };
         }
@@ -229,7 +373,6 @@ testAttemptSchema.methods.calculateResults = function(questions) {
         else if (attempted && answer.evaluationStatus !== 'ungraded') subjectMap[question.subject].incorrect++;
         subjectMap[question.subject].marks += answer.marksAwarded || 0;
 
-        // Chapter-wise score math should also ignore ungraded learning items.
         const chapterKey = `${question.subject}-${question.chapter}`;
         if (!chapterMap[chapterKey]) {
           chapterMap[chapterKey] = { chapter: question.chapter, subject: question.subject, total: 0, correct: 0, incorrect: 0, partial: 0 };
@@ -242,29 +385,25 @@ testAttemptSchema.methods.calculateResults = function(questions) {
     }
   });
   
-  // Calculate totals
   results.totalMarks = results.gradedQuestions * 4;
   results.percentage = results.totalMarks > 0 ? (results.marksObtained / results.totalMarks) * 100 : 0;
   
-  // Subject-wise accuracy
   results.subjectWise = Object.keys(subjectMap).map(subject => ({
     subject,
     ...subjectMap[subject],
     accuracy: subjectMap[subject].attempted > 0 ? (subjectMap[subject].correct / subjectMap[subject].attempted) * 100 : 0
   }));
   
-  // Chapter-wise accuracy
   results.chapterWise = Object.values(chapterMap).map(chapter => ({
     ...chapter,
     accuracy: chapter.total > 0 ? (chapter.correct / chapter.total) * 100 : 0
   }));
   
-  // Time analysis
   results.timeAnalysis = {
     totalTime,
     avgTimePerQuestion: results.totalQuestions > 0 ? totalTime / results.totalQuestions : 0,
-    fastestQuestion: this.answers.length > 0 ? Math.min(...this.answers.map(a => a.timeSpent || 0)) : 0,
-    slowestQuestion: this.answers.length > 0 ? Math.max(...this.answers.map(a => a.timeSpent || 0)) : 0
+    fastestQuestion: this.answers.length > 0 ? Math.min(...this.answers.map(a => a.timeSpent || a.timeSpentSeconds || 0)) : 0,
+    slowestQuestion: this.answers.length > 0 ? Math.max(...this.answers.map(a => a.timeSpent || a.timeSpentSeconds || 0)) : 0
   };
   
   this.results = results;

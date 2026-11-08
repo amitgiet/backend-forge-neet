@@ -1,6 +1,12 @@
 const SUPPORTED_TYPES = ['mcq', 'fillup', 'match', 'order', 'flashcard', 'video'];
 const GRADED_TYPES = ['mcq', 'fillup', 'match', 'order'];
 
+const FORMULA_REGEX = /\$\$[\s\S]*?\$\$|\$[^\$\n]+\$|\\\(|\\\[|\\frac|\\sqrt|\\times|\\pm|\\rightarrow|\\Delta|\\theta|\\omega|\\lambda|\\alpha|\\beta|\\mu|\\Omega|[\u03B1-\u03C9\u0391-\u03A9\u221A\u00B2\u00B3\u00B1\u00D7\u00F7\u00B0\u03C0\u03B8]|π|√|²|³|±|×|÷|°/i;
+const STMT_REGEX = /(?:Given below are two statements[:\s]*)?Statement\s*(?:I|1)\s*[:.)-]\s*([\s\S]*?)\s*Statement\s*(?:II|2)\s*[:.)-]\s*([\s\S]*?)(?:In the light of the above statements|Choose the correct answer|Select the correct option|$)/i;
+const MATCH_HEADER_REGEX = /Column\s*(?:I|1).*Column\s*(?:II|2)|List\s*[-–]?\s*(?:I|1).*List\s*[-–]?\s*(?:II|2)|Match\s+(?:the\s+)?following/i;
+const MATRIX_PAIR_REGEX = /\(([a-d])\)\s*([\s\S]+?)\s*[-–]\s*\(([ivx\d]+)\)\s*([^\n\r]+)/gi;
+const MATRIX_OPTION_CODE_REGEX = /[a-d]\s*-\s*\([i|v|x\d]+\)/i;
+
 const hasText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 const pickLocalizedValue = (value, language = 'en') => {
@@ -45,6 +51,177 @@ const buildUnsupported = (type, reason) => ({
     isSupported: false,
     unsupportedReason: reason || `${type} data is not available yet`,
 });
+
+const detectFormula = (questionText, options = {}, explanation = '') => {
+    if (FORMULA_REGEX.test(String(questionText || ''))) return true;
+    if (FORMULA_REGEX.test(String(explanation || ''))) return true;
+    const optionValues = Array.isArray(options) ? options : Object.values(options || {});
+    for (const val of optionValues) {
+        const text = typeof val === 'object' && val !== null ? (val.text || val.value || '') : String(val || '');
+        if (FORMULA_REGEX.test(String(text || ''))) return true;
+    }
+    return false;
+};
+
+const parseAssertionReason = (questionText) => {
+    if (!questionText || typeof questionText !== 'string') return null;
+    const cleaned = questionText.replace(/^(?:Consider the following\s+)?Assertion\s*(?:\(A\))?\s*(?:and|&)\s*Reason\s*(?:\(R\))?[:\s]*/i, '').trim();
+    const regex = /(?:Assertion\s*(?:\(A\)|[-:])|\bA\s*[:.-])\s*([\s\S]*?)\s*(?:Reason\s*(?:\(R\)|[-:])|\bR\s*[:.-])\s*([\s\S]*?)(?:Choose the correct statement|Select the correct option|Choose the correct answer|$)/i;
+    const match = cleaned.match(regex);
+    if (!match) return null;
+
+    const assertion = match[1].replace(/^\s*[:.-]\s*/, '').trim();
+    const reason = match[2].replace(/^\s*[:.-]\s*/, '').trim();
+
+    if (!assertion || !reason) return null;
+
+    return {
+        assertion,
+        reason,
+        standardOptions: true,
+    };
+};
+
+const parseStatementQuestion = (questionText) => {
+    if (!questionText || typeof questionText !== 'string') return null;
+    const match = questionText.match(STMT_REGEX);
+    if (!match) return null;
+
+    const statement1 = match[1].replace(/^\s*[:.-]\s*/, '').trim();
+    const statement2 = match[2].replace(/^\s*[:.-]\s*/, '').trim();
+
+    if (!statement1 || !statement2) return null;
+
+    return {
+        statement1,
+        statement2,
+    };
+};
+
+const parseMatrixMatch = (questionText, options = {}) => {
+    if (!questionText || typeof questionText !== 'string') return null;
+
+    const isMatchHeader = MATCH_HEADER_REGEX.test(questionText);
+    if (!isMatchHeader) return null;
+
+    const pairs = [];
+    let match;
+    const regex = new RegExp(MATRIX_PAIR_REGEX);
+    while ((match = regex.exec(questionText)) !== null) {
+        pairs.push({
+            id: match[1].toUpperCase(),
+            leftLabel: `(${match[1]})`,
+            leftText: match[2].trim(),
+            rightLabel: `(${match[3]})`,
+            rightText: match[4].trim(),
+        });
+    }
+
+    const optionCodes = {};
+    let isMatrixOptions = false;
+    ['A', 'B', 'C', 'D'].forEach((key) => {
+        const val = options[key] || options[key.toLowerCase()];
+        if (typeof val === 'string') {
+            optionCodes[key] = val.trim();
+            if (MATRIX_OPTION_CODE_REGEX.test(val)) {
+                isMatrixOptions = true;
+            }
+        }
+    });
+
+    if (pairs.length >= 2 || isMatrixOptions) {
+        return {
+            pairs,
+            matrixOptions: optionCodes,
+            isMatrixMCQ: isMatrixOptions,
+        };
+    }
+
+    return null;
+};
+
+const parseFillupSyllables = (options = {}, correctAnswer = '') => {
+    const primaryRaw = options?.A || options?.a || options?.primary;
+    if (!primaryRaw || typeof primaryRaw !== 'string') {
+        return { syllableTokens: [], distractorTokens: [] };
+    }
+
+    const rawTokens = primaryRaw
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+
+    const cleanAnswer = String(correctAnswer || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+
+    const syllableTokens = [];
+    const distractorTokens = [];
+
+    rawTokens.forEach((token) => {
+        const cleanToken = token.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (cleanAnswer.includes(cleanToken) && cleanToken.length > 0) {
+            syllableTokens.push(token);
+        } else {
+            distractorTokens.push(token);
+        }
+    });
+
+    return {
+        syllableTokens: syllableTokens.length ? syllableTokens : rawTokens,
+        distractorTokens,
+    };
+};
+
+const parseOrderQuestion = (options = {}, correctAnswer = '') => {
+    const items = [];
+    const labels = ['A', 'B', 'C', 'D'];
+
+    labels.forEach((label) => {
+        const raw = options[label] || options[label.toLowerCase()];
+        if (!raw || typeof raw !== 'string') return;
+
+        const commaIdx = raw.indexOf(',');
+        if (commaIdx !== -1) {
+            const stepNum = parseInt(raw.slice(0, commaIdx).trim(), 10);
+            const text = raw.slice(commaIdx + 1).trim();
+            items.push({
+                id: label,
+                stepNumber: isNaN(stepNum) ? items.length + 1 : stepNum,
+                text,
+            });
+        } else {
+            items.push({
+                id: label,
+                stepNumber: items.length + 1,
+                text: raw.trim(),
+            });
+        }
+    });
+
+    if (items.length < 2) return null;
+
+    const splitChar = String(correctAnswer || '').includes('>')
+        ? '>'
+        : String(correctAnswer || '').includes('→')
+            ? '→'
+            : ',';
+    const correctSequence = String(correctAnswer || '')
+        .split(splitChar)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+    const correctOrder = items
+        .slice()
+        .sort((a, b) => a.stepNumber - b.stepNumber)
+        .map((item) => item.id);
+
+    return {
+        items,
+        correctSequence,
+        correctOrder,
+    };
+};
 
 const splitMatchPair = (value) => {
     const text = pickLocalizedValue(value);
@@ -95,7 +272,6 @@ const normalizeMatchPair = (pair = {}, index = 0, language = 'en') => ({
     left: pickLocalizedValue(pair?.left, language) || '',
     right: pickLocalizedValue(pair?.right, language) || '',
 });
-
 
 const buildTypeDataFromImported = (question = {}) => {
     const type = normalizeQuestionType(question.type);
@@ -278,46 +454,97 @@ const buildTypeDataFromQuestionDoc = (question = {}, language = 'en') => {
     return buildUnsupported(type, `Unsupported question type: ${type}`);
 };
 
-const serializeImportedQuestionForClient = (question = {}) => {
-    const type = normalizeQuestionType(question.type);
-    const { typeData, isSupported, unsupportedReason } = buildTypeDataFromImported(question);
-    return {
-        ...question,
-        type,
-        questionType: type,
-        correctAnswer: question?.correct_option || question?.correct_answer || null,
-        imageId: question?.imageId || null,
-        imageUrl: question?.imageUrl || null,
-        explanationImageUrl: question?.explanationImageUrl || null,
-        videoUrl: question?.videoUrl || typeData.videoUrl || null,
-        typeData,
-        isSupported,
-        unsupportedReason,
-    };
-};
-
-const serializeQuestionDocForClient = (question = {}, language = 'en') => {
-    const rawQuestion = typeof question.toObject === 'function' ? question.toObject() : question;
+const serializeQuestionForClient = (question = {}, language = 'en') => {
+    if (!question) return null;
+    const rawQuestion = typeof question.toObject === 'function' ? question.toObject() : { ...question };
     const type = normalizeQuestionType(rawQuestion.questionType || rawQuestion.type);
-    const localizedQuestion = pickLocalizedValue(rawQuestion.question, language) || '';
-    const localizedExplanation = pickLocalizedValue(rawQuestion.explanation, language) || '';
-    const { typeData, isSupported, unsupportedReason } = buildTypeDataFromQuestionDoc(rawQuestion, language);
+    const questionText = pickLocalizedValue(rawQuestion.question, language) || '';
+    const explanation = pickLocalizedValue(rawQuestion.explanation, language) || '';
+
+    const isImportedFormat = rawQuestion.options && !Array.isArray(rawQuestion.options) && typeof rawQuestion.options === 'object';
+    const baseResult = isImportedFormat
+        ? buildTypeDataFromImported(rawQuestion)
+        : buildTypeDataFromQuestionDoc(rawQuestion, language);
+
+    const typeData = { ...baseResult.typeData };
+    let isSupported = baseResult.isSupported;
+    let unsupportedReason = baseResult.unsupportedReason;
+
+    const optionsSource = rawQuestion.options || typeData.optionMap || {};
+    const isFormula = detectFormula(questionText, optionsSource, explanation);
+    const correctAnswer = rawQuestion.correctAnswer || rawQuestion.correct_answer || rawQuestion.correct_option || typeData.correctOption || null;
+
+    if (type === 'mcq') {
+        const ar = parseAssertionReason(questionText);
+        if (ar) {
+            typeData.kind = 'assertion_reason';
+            typeData.assertionReason = ar;
+        } else {
+            const stmt = parseStatementQuestion(questionText);
+            if (stmt) {
+                typeData.kind = 'statement';
+                typeData.statementData = stmt;
+            } else {
+                const mm = parseMatrixMatch(questionText, optionsSource);
+                if (mm) {
+                    typeData.kind = 'match';
+                    typeData.matrixData = mm;
+                }
+            }
+        }
+    } else if (type === 'fillup') {
+        const syllables = parseFillupSyllables(optionsSource, correctAnswer);
+        if (syllables.syllableTokens.length > 0) {
+            const combinedTokens = [...syllables.syllableTokens, ...syllables.distractorTokens];
+            const tokenRack = combinedTokens.slice().sort(() => Math.random() - 0.5);
+            typeData.syllables = {
+                primaryAnswer: typeData.primaryAnswer || correctAnswer,
+                acceptedAnswers: typeData.acceptedAnswers || [correctAnswer].filter(Boolean),
+                syllableTokens: syllables.syllableTokens,
+                distractorTokens: syllables.distractorTokens,
+                tokenRack,
+            };
+        }
+    } else if (type === 'order') {
+        if (!typeData.items || typeData.items.length === 0) {
+            const order = parseOrderQuestion(optionsSource, correctAnswer);
+            if (order) {
+                typeData.items = order.items;
+                typeData.correctOrder = order.correctOrder;
+                typeData.correctSequence = order.correctSequence;
+                isSupported = true;
+                unsupportedReason = null;
+            }
+        }
+    }
+
+    const imageUrl = rawQuestion.imageUrl || rawQuestion.questionImageUrl || null;
+    const explanationImageUrl = rawQuestion.explanationImageUrl || rawQuestion.typeData?.explanationImageUrl || null;
 
     return {
         ...rawQuestion,
         type,
         questionType: type,
-        question: localizedQuestion,
-        explanation: localizedExplanation,
-        imageId: rawQuestion?.imageId || null,
-        imageUrl: rawQuestion?.imageUrl || null,
-        explanationImageUrl: rawQuestion?.typeData?.explanationImageUrl || rawQuestion?.explanationImageUrl || null,
-        videoUrl: rawQuestion?.videoExplanation?.url || rawQuestion?.typeData?.videoUrl || null,
+        question: questionText,
+        explanation,
+        imageId: rawQuestion.imageId || null,
+        imageUrl,
+        explanationImageUrl,
+        videoUrl: rawQuestion.videoExplanation?.url || rawQuestion.videoUrl || typeData.videoUrl || null,
         typeData,
-        correctAnswer: rawQuestion?.correctAnswer || typeData.correctOption || null,
+        correctAnswer,
+        isFormula,
         isSupported,
         unsupportedReason,
     };
+};
+
+const serializeImportedQuestionForClient = (question = {}) => {
+    return serializeQuestionForClient(question, 'en');
+};
+
+const serializeQuestionDocForClient = (question = {}, language = 'en') => {
+    return serializeQuestionForClient(question, language);
 };
 
 const answerPayloadHasValue = (payload = {}) => {
@@ -383,7 +610,8 @@ const isQuestionTypeGraded = (type) => GRADED_TYPES.includes(normalizeQuestionTy
 const evaluateQuestionAttempt = (question = {}, answer = {}, testConfig = {}) => {
     const type = normalizeQuestionType(question.questionType || question.type);
     const typeData = question.typeData || {};
-    const attempted = Boolean(answer?.selectedOption) || answerPayloadHasValue(answer?.answerPayload);
+    const payload = answer?.answerPayload || {};
+    const attempted = Boolean(answer?.selectedOption) || answerPayloadHasValue(payload);
     if (!attempted) {
         return {
             attempted: false,
@@ -396,10 +624,12 @@ const evaluateQuestionAttempt = (question = {}, answer = {}, testConfig = {}) =>
 
     const marksPerQuestion = Number(testConfig?.marksPerQuestion || 4);
     const negativeMarks = testConfig?.negativeMarking ? Number(testConfig?.negativeMarks || 0) : 0;
-    const payload = answer?.answerPayload || {};
 
     if (type === 'mcq') {
-        const selectedOption = String(answer?.selectedOption || '').trim().toUpperCase();
+        let selectedOption = String(answer?.selectedOption || '').trim().toUpperCase();
+        if (!selectedOption && payload?.kind === 'mcq' && Number.isInteger(payload.selectedOption)) {
+            selectedOption = String.fromCharCode(65 + payload.selectedOption);
+        }
         const correctOption = String(typeData.correctOption || question.correctAnswer || '').trim().toUpperCase();
         const isCorrect = Boolean(selectedOption && correctOption && selectedOption === correctOption);
         return {
@@ -413,7 +643,8 @@ const evaluateQuestionAttempt = (question = {}, answer = {}, testConfig = {}) =>
 
     if (type === 'fillup') {
         const acceptedAnswers = Array.isArray(typeData.acceptedAnswers) ? typeData.acceptedAnswers : [];
-        const normalizedUser = normalizeTextAnswer(payload.value);
+        const userVal = payload.value !== undefined ? payload.value : answer?.selectedOption;
+        const normalizedUser = normalizeTextAnswer(userVal);
         const normalizedCandidates = acceptedAnswers.map((candidate) => normalizeTextAnswer(candidate)).filter(Boolean);
         const exactMatch = normalizedCandidates.some((candidate) => candidate === normalizedUser);
         const similarity = exactMatch
@@ -485,9 +716,18 @@ const evaluateQuestionAttempt = (question = {}, answer = {}, testConfig = {}) =>
 };
 
 module.exports = {
+    FORMULA_REGEX,
+    detectFormula,
+    parseAssertionReason,
+    parseStatementQuestion,
+    parseMatrixMatch,
+    parseFillupSyllables,
+    parseOrderQuestion,
     normalizeQuestionType,
     isQuestionTypeGraded,
     buildTypeDataFromImported,
+    buildTypeDataFromQuestionDoc,
+    serializeQuestionForClient,
     serializeImportedQuestionForClient,
     serializeQuestionDocForClient,
     answerPayloadHasValue,

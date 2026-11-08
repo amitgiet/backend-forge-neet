@@ -152,27 +152,54 @@ exports.deleteDoubt = async (req, res) => {
 };
 
 // ── Toggle upvote on doubt ───────────────────────────────────────────────────
-exports.toggleDoubtUpvote = async (req, res) => {
+exports.upvoteDoubt = exports.toggleDoubtUpvote = async (req, res, next) => {
     try {
-        const doubt = await Doubt.findById(req.params.id);
-        if (!doubt) return res.status(404).json({ success: false, error: 'Doubt not found' });
+        const { id } = req.params;
+        const userId = req.user._id || req.user.id;
 
-        const uid = req.user.id;
-        const hasUpvoted = doubt.upvotedBy.some((id) => String(id) === String(uid));
+        const existing = await Doubt.findOne({ _id: id, upvotedBy: userId }).select('_id').lean();
 
-        if (hasUpvoted) {
-            doubt.upvotedBy.pull(uid);
-            doubt.upvotes = Math.max(0, doubt.upvotes - 1);
+        let updatedDoubt;
+        if (existing) {
+            updatedDoubt = await Doubt.findByIdAndUpdate(
+                id,
+                {
+                    $pull: { upvotedBy: userId },
+                    $inc: { upvotes: -1 }
+                },
+                { new: true }
+            ).select('upvotes upvotedBy');
         } else {
-            doubt.upvotedBy.push(uid);
-            doubt.upvotes += 1;
+            updatedDoubt = await Doubt.findByIdAndUpdate(
+                id,
+                {
+                    $addToSet: { upvotedBy: userId },
+                    $inc: { upvotes: 1 }
+                },
+                { new: true }
+            ).select('upvotes upvotedBy');
         }
 
-        await doubt.save();
-        res.json({ success: true, data: { upvotes: doubt.upvotes, upvoted: !hasUpvoted } });
+        if (!updatedDoubt) {
+            return res.status(404).json({ success: false, error: 'Doubt not found' });
+        }
+
+        const safeUpvotes = Math.max(0, updatedDoubt.upvotes);
+        return res.status(200).json({
+            success: true,
+            upvotes: safeUpvotes,
+            hasUpvoted: !existing,
+            data: {
+                upvotes: safeUpvotes,
+                upvoted: !existing
+            }
+        });
     } catch (err) {
-        console.error('toggleDoubtUpvote error:', err);
-        res.status(500).json({ success: false, error: 'Server error' });
+        if (typeof next === 'function') next(err);
+        else {
+            console.error('toggleDoubtUpvote error:', err);
+            res.status(500).json({ success: false, error: 'Server error' });
+        }
     }
 };
 
