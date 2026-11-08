@@ -48,6 +48,10 @@ exports.protect = async (req, res, next) => {
             .select('-password')
             .lean();
 
+        if (user) {
+            user.id = user._id ? user._id.toString() : decoded.id;
+        }
+
         if (!user) {
             return res.status(401).json({
                 success: false,
@@ -140,6 +144,9 @@ exports.optionalAuth = async (req, res, next) => {
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             const user = await User.findById(decoded.id).select('-password').lean();
+            if (user) {
+                user.id = user._id ? user._id.toString() : decoded.id;
+            }
             const userTokenVersion = user?.tokenVersion !== undefined ? user.tokenVersion : 0;
             const decodedTokenVersion = decoded.tokenVersion !== undefined ? decoded.tokenVersion : 0;
             if (user && user.isActive && decodedTokenVersion === userTokenVersion) {
