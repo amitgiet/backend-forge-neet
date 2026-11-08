@@ -25,11 +25,27 @@ exports.protect = async (req, res, next) => {
         });
     }
 
+    let decoded;
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                code: 'TOKEN_EXPIRED',
+                error: 'Session expired'
+            });
+        }
+        return res.status(401).json({
+            success: false,
+            code: 'TOKEN_INVALID',
+            error: 'Invalid authentication token'
+        });
+    }
 
+    try {
         const user = await User.findById(decoded.id)
-            .select('-password +tokenVersion')
+            .select('-password')
             .lean();
 
         if (!user) {
@@ -48,7 +64,10 @@ exports.protect = async (req, res, next) => {
             });
         }
 
-        if (decoded.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+        const userTokenVersion = user.tokenVersion !== undefined ? user.tokenVersion : 0;
+        const decodedTokenVersion = decoded.tokenVersion !== undefined ? decoded.tokenVersion : 0;
+
+        if (decodedTokenVersion !== userTokenVersion) {
             return res.status(401).json({
                 success: false,
                 code: 'TOKEN_REVOKED',
@@ -59,18 +78,7 @@ exports.protect = async (req, res, next) => {
         req.user = user;
         next();
     } catch (err) {
-        if (err.name === 'TokenExpiredError') {
-            return res.status(401).json({
-                success: false,
-                code: 'TOKEN_EXPIRED',
-                error: 'Session expired'
-            });
-        }
-        return res.status(401).json({
-            success: false,
-            code: 'TOKEN_INVALID',
-            error: 'Invalid authentication token'
-        });
+        next(err);
     }
 };
 
@@ -131,8 +139,10 @@ exports.optionalAuth = async (req, res, next) => {
     if (token) {
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            const user = await User.findById(decoded.id).select('-password +tokenVersion').lean();
-            if (user && user.isActive && (decoded.tokenVersion === undefined || decoded.tokenVersion === user.tokenVersion)) {
+            const user = await User.findById(decoded.id).select('-password').lean();
+            const userTokenVersion = user?.tokenVersion !== undefined ? user.tokenVersion : 0;
+            const decodedTokenVersion = decoded.tokenVersion !== undefined ? decoded.tokenVersion : 0;
+            if (user && user.isActive && decodedTokenVersion === userTokenVersion) {
                 req.user = user;
             } else {
                 req.user = null;
