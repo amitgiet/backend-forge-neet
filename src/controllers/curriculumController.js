@@ -19,6 +19,7 @@ const makeProgressKey = (topic, subTopic) => `${String(topic)}|||${String(subTop
 const nowUtc = () => new Date();
 const addHours = (date, hours) => new Date(date.getTime() + hours * 60 * 60 * 1000);
 const optionIndexToKey = (index) => String.fromCharCode(65 + Number(index));
+const getUserId = (req) => req.user?.id || (req.user?._id ? req.user._id.toString() : null);
 
 const sanitizeAnswers = (rawAnswers = [], total = 0) => {
     const targetLength = Math.max(0, Number(total) || 0);
@@ -262,11 +263,12 @@ exports.getSubTopics = async (req, res) => {
             }
         }
 
-        await expireStaleRuns(req.user.id);
+        const userId = getUserId(req);
+        await expireStaleRuns(userId);
 
         const attempts = await ImportedSubtopicAttempt.find(
             {
-                userId: req.user.id,
+                userId,
                 subject: normalizedSubject,
                 chapterId: String(chapterId),
             },
@@ -294,7 +296,7 @@ exports.getSubTopics = async (req, res) => {
 
         const activeRuns = await ImportedCurriculumQuizRun.find(
             {
-                userId: req.user.id,
+                userId,
                 subject: normalizedSubject,
                 chapterId: String(chapterId),
                 status: 'in_progress',
@@ -401,10 +403,11 @@ exports.startCurriculumRun = async (req, res) => {
             return res.status(400).json({ success: false, error: 'uids are required to start a run' });
         }
 
-        await expireStaleRuns(req.user.id);
+        const userId = getUserId(req);
+        await expireStaleRuns(userId);
 
         let existing = await ImportedCurriculumQuizRun.findOne({
-            userId: req.user.id,
+            userId,
             subject: normalizedSubject,
             chapterId: normalizedChapterId,
             topic: normalizedTopic,
@@ -443,7 +446,7 @@ exports.startCurriculumRun = async (req, res) => {
         let run = existing;
         if (!run) {
             run = await ImportedCurriculumQuizRun.create({
-                userId: req.user.id,
+                userId,
                 subject: normalizedSubject,
                 chapterId: normalizedChapterId,
                 topic: normalizedTopic,
@@ -486,10 +489,11 @@ exports.startCurriculumRun = async (req, res) => {
 
 exports.getCurriculumRun = async (req, res) => {
     try {
-        await expireStaleRuns(req.user.id);
+        const userId = getUserId(req);
+        await expireStaleRuns(userId);
         const run = await ImportedCurriculumQuizRun.findOne({
             _id: req.params.runId,
-            userId: req.user.id,
+            userId,
         });
         if (!run) {
             return res.status(404).json({ success: false, error: 'Run not found' });
@@ -514,10 +518,11 @@ exports.getCurriculumRun = async (req, res) => {
 
 exports.updateCurriculumRunProgress = async (req, res) => {
     try {
-        await expireStaleRuns(req.user.id);
+        const userId = getUserId(req);
+        await expireStaleRuns(userId);
         const run = await ImportedCurriculumQuizRun.findOne({
             _id: req.params.runId,
-            userId: req.user.id,
+            userId,
             status: 'in_progress',
         });
         if (!run) {
@@ -562,10 +567,11 @@ exports.updateCurriculumRunProgress = async (req, res) => {
 
 exports.abandonCurriculumRun = async (req, res) => {
     try {
-        await expireStaleRuns(req.user.id);
+        const userId = getUserId(req);
+        await expireStaleRuns(userId);
         const run = await ImportedCurriculumQuizRun.findOne({
             _id: req.params.runId,
-            userId: req.user.id,
+            userId,
             status: 'in_progress',
         });
         if (!run) {
@@ -586,10 +592,11 @@ exports.abandonCurriculumRun = async (req, res) => {
 
 exports.submitCurriculumRun = async (req, res) => {
     try {
-        await expireStaleRuns(req.user.id);
+        const userId = getUserId(req);
+        await expireStaleRuns(userId);
         const run = await ImportedCurriculumQuizRun.findOne({
             _id: req.params.runId,
-            userId: req.user.id,
+            userId,
             status: 'in_progress',
         });
         if (!run) {
@@ -630,7 +637,7 @@ exports.submitCurriculumRun = async (req, res) => {
         await run.save();
 
         await ImportedSubtopicAttempt.create({
-            userId: req.user.id,
+            userId,
             subject: run.subject,
             chapterId: run.chapterId,
             topic: run.topic,
@@ -645,7 +652,7 @@ exports.submitCurriculumRun = async (req, res) => {
         });
 
         try {
-            await enrollQuestionsInNeuronZ(req.user.id, run.uids || [], run.answers || [], {
+            await enrollQuestionsInNeuronZ(userId, run.uids || [], run.answers || [], {
                 subject: run.subject,
                 chapterId: run.chapterId,
                 topic: run.topic,
@@ -656,7 +663,7 @@ exports.submitCurriculumRun = async (req, res) => {
         }
 
         const UserActivityService = require('../services/userActivityService');
-        await UserActivityService.logActivity(req.user.id, 'curriculum_topic_completed', {
+        await UserActivityService.logActivity(userId, 'curriculum_topic_completed', {
             subject: run.subject,
             chapterId: run.chapterId,
             topic: run.topic,
@@ -731,8 +738,9 @@ exports.trackSubTopicAttempt = async (req, res) => {
 
         const percentage = Math.round((correct / total) * 100);
 
+        const userId = getUserId(req);
         const attempt = await ImportedSubtopicAttempt.create({
-            userId: req.user.id,
+            userId,
             subject: normalizedSubject,
             chapterId: normalizedChapterId,
             topic: normalizedTopic,
@@ -750,7 +758,7 @@ exports.trackSubTopicAttempt = async (req, res) => {
         try {
             const normalizedUids = Array.isArray(uids) ? uids.map(Number).filter(Number.isFinite) : [];
             const syntheticAnswers = normalizedUids.map(() => 0); // mark as attempted for enroll path
-            await enrollQuestionsInNeuronZ(req.user.id, normalizedUids, syntheticAnswers, {
+            await enrollQuestionsInNeuronZ(userId, normalizedUids, syntheticAnswers, {
                 subject: normalizedSubject,
                 chapterId: normalizedChapterId,
                 topic: normalizedTopic,
